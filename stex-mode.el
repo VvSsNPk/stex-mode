@@ -53,12 +53,15 @@
 ;; connected `flams' server, so there is nothing to configure) and
 ;; either visit the chosen file or insert a \usemodule reference to it
 ;; at point, one `completing-read' drill-down at a time.
-;; `stex-mathhub-tree' instead shows the whole local MathHub as a
-;; persistent, expandable tree in a side window (see
-;; `stex-mathhub-tree-side'), for browsing without knowing what you're
-;; looking for ahead of time.  Only local archives are browsed in any
-;; of these -- there is no remote-archive browsing or
-;; install-from-remote support.
+;; `stex-mathhub-tree' instead shows the whole local MathHub as one
+;; persistent, `dired'-like tree in a side window, reconfigurable in
+;; place (narrow to the archive at point and back out, open a file,
+;; insert a \usemodule reference -- see its docstring for the full
+;; keybinding list).  None of the MathHub commands need a `.tex' file
+;; open at all: if nothing is already connected anywhere, they launch
+;; a standalone `flams' connection against `stex-mathhub-root' and
+;; wait for it.  Only local archives are browsed in any of these --
+;; there is no remote-archive browsing or install-from-remote support.
 ;;
 ;; Call hierarchy and document symbols are eglot's own generic LSP
 ;; features, not FLAMS-specific -- `stex-show-call-hierarchy' (a thin
@@ -152,6 +155,25 @@ is a number of columns.  Only used when `stex-mathhub-tree-side' is
 non-nil."
   :type '(choice (float :tag "Fraction of frame width")
                   (integer :tag "Columns"))
+  :group 'stex)
+
+(defcustom stex-mathhub-root nil
+  "Directory to run a standalone `flams' connection in.
+MathHub browsing commands (`stex-mathhub-tree' etc.) need a live
+`flams' connection.  If one already exists (from any `stex-mode'
+buffer, anywhere), it's reused; only when none exists at all does
+this matter -- it's the directory `flams' runs in so you can browse
+MathHub without ever opening a `.tex' file.  Set it to your MathHub
+root, or any directory `flams' is happy to run in."
+  :type '(choice (const :tag "Not configured" nil) directory)
+  :group 'stex)
+
+(defcustom stex-mathhub-connect-timeout 20
+  "Seconds to wait for a standalone MathHub connection to come up.
+Only applies to `stex-mathhub-root'-based connections (see
+`stex-mathhub-tree' etc.) -- reusing an already-connected `stex-mode'
+buffer's server involves no waiting."
+  :type 'integer
   :group 'stex)
 
 (defcustom stex-preview-auto-open nil
@@ -429,6 +451,111 @@ its URL yet."
         (user-error
          "𝖥𝖫∀𝖬∫: server hasn't reported its HTTP URL yet; wait a moment and retry"))))
 
+;;; Standalone connection (MathHub browsing without a visited .tex file)
+
+(defun stex--live-stex-server-p (server)
+  "Return non-nil if SERVER is a live (running) `stex-eglot-server'."
+  (and (stex-eglot-server-p server) (jsonrpc-running-p server)))
+
+(defun stex--find-live-server ()
+  "Return any live `stex-eglot-server', or nil if none is connected.
+Prefers the current buffer's server; otherwise scans every project's
+servers, so this finds a connection made from a completely different
+buffer (including the hidden one `stex--launch-standalone-server'
+uses)."
+  (or (let ((s (eglot-current-server)))
+        (and (stex--live-stex-server-p s) s))
+      (and (boundp 'eglot--servers-by-project)
+           (cl-loop for servers being the hash-values of eglot--servers-by-project
+                    thereis (cl-find-if #'stex--live-stex-server-p servers)))))
+
+(defun stex--launch-standalone-server ()
+  "Start connecting to `flams' against `stex-mathhub-root'.
+No visited file is involved -- this is for MathHub browsing when
+nothing is connected anywhere yet.  Does not wait for the connection;
+see `stex--ensure-mathhub-server'.
+
+This calls eglot's own internal `eglot--connect' directly rather than
+the usual `eglot-mode'/`eglot-ensure' path, because `eglot-ensure'
+defers connecting to the next `post-command-hook' run -- which never
+fires here, since nothing returns to the top-level command loop
+between this call and the caller polling for the result.  Verified
+against the bundled eglot's (MANAGED-MODES PROJECT CLASS CONTACT
+LANGUAGE-IDS) signature by reading eglot.el directly; if a future
+eglot version changes it, the `fboundp' guard below at least fails
+with a clear message instead of a cryptic wrong-number-of-arguments
+error."
+  (unless stex-mathhub-root
+    (user-error
+     "𝖥𝖫∀𝖬∫: no flams connection, and `stex-mathhub-root' is unset; \
+set it (M-x customize-group RET stex RET) or open a .tex file with `stex-mode' first"))
+  (unless (file-directory-p stex-mathhub-root)
+    (user-error "𝖥𝖫∀𝖬∫: `stex-mathhub-root' (%s) is not a directory"
+                stex-mathhub-root))
+  (unless (fboundp 'eglot--connect)
+    (user-error
+     "𝖥𝖫∀𝖬∫: this Emacs's eglot lacks `eglot--connect'; open a .tex file with `stex-mode' instead"))
+  (stex--check-setup)
+  (with-current-buffer (get-buffer-create " *stex-mathhub-connection*")
+    (setq default-directory (file-name-as-directory (expand-file-name stex-mathhub-root)))
+    (unless (eq major-mode 'latex-mode)
+      (latex-mode))
+    (let ((eglot-sync-connect nil)) ; we poll ourselves in stex--ensure-mathhub-server
+      (eglot--connect '(latex-mode LaTeX-mode) (eglot--current-project)
+                       'stex-eglot-server (stex--eglot-contact)
+                       ;; A list of language ids parallel to managed-modes,
+                       ;; not an alist -- confirmed via eglot--connect's own
+                       ;; (cl-loop for m in managed-modes for l in language-ids
+                       ;; collect (cons m l)).
+                       '("latex" "latex")))))
+
+(defun stex--poll-until (predicate timeout message)
+  "Call PREDICATE repeatedly until it's non-nil or TIMEOUT seconds pass.
+Shows MESSAGE meanwhile.  Return PREDICATE's value, or nil on
+timeout.  Uses `sit-for', so `C-g' aborts it like any blocking Emacs
+operation, and process output/notifications are processed normally
+while waiting."
+  (let ((deadline (+ (float-time) timeout))
+        result)
+    (while (and (not (setq result (funcall predicate)))
+                (< (float-time) deadline))
+      (message "%s" message)
+      (sit-for 0.2))
+    result))
+
+(defun stex--ensure-mathhub-server ()
+  "Return a live `stex-eglot-server' with a known HTTP URL.
+Reuses any already-connected one (from a real `stex-mode' buffer,
+this one or any other); otherwise launches a standalone connection
+against `stex-mathhub-root' and waits (up to
+`stex-mathhub-connect-timeout' seconds, twice over: once for the
+connection itself, once for it to report its HTTP URL) for it to
+come up."
+  (let ((server (stex--find-live-server)))
+    (unless server
+      (stex--launch-standalone-server)
+      (setq server
+            (or (stex--poll-until #'stex--find-live-server
+                                   stex-mathhub-connect-timeout
+                                   "𝖥𝖫∀𝖬∫: waiting for flams to initialize...")
+                (user-error "𝖥𝖫∀𝖬∫: flams didn't initialize within %ss"
+                            stex-mathhub-connect-timeout))))
+    (unless (stex-eglot-server-http-url server)
+      (unless (stex--poll-until (lambda () (stex-eglot-server-http-url server))
+                                 stex-mathhub-connect-timeout
+                                 "𝖥𝖫∀𝖬∫: waiting for flams to report its HTTP URL...")
+        (user-error "𝖥𝖫∀𝖬∫: flams didn't report its HTTP URL within %ss"
+                    stex-mathhub-connect-timeout)))
+    server))
+
+(defun stex--mathhub-base-url ()
+  "Return the flams HTTP base URL to use for MathHub browsing.
+Unlike `stex--server-http-url' (build/export/preview, which
+inherently need a real visited file), this launches a standalone
+connection via `stex--ensure-mathhub-server' if nothing is connected
+anywhere yet."
+  (stex-eglot-server-http-url (stex--ensure-mathhub-server)))
+
 (defun stex--buffer-uri ()
   "Return the current buffer file's LSP URI, or signal `user-error'."
   (unless buffer-file-name
@@ -534,7 +661,7 @@ alists for objects and lists for arrays."
 
 (defun stex--mathhub-settings ()
   "Return the connected server's configured MathHub directories."
-  (let ((base (stex--server-http-url)))
+  (let ((base (stex--mathhub-base-url)))
     (or (cdr (assoc base stex--mathhub-settings-cache))
         (let* ((resp (stex--http-post base "api/settings" nil))
                (mathhubs (alist-get 'mathhubs (car resp))))
@@ -543,7 +670,7 @@ alists for objects and lists for arrays."
 
 (defun stex--mathhub-group-entries (&optional group-id)
   "Return (GROUP-IDS . ARCHIVE-IDS) under GROUP-ID (top-level if nil)."
-  (let* ((base (stex--server-http-url))
+  (let* ((base (stex--mathhub-base-url))
          (resp (stex--http-post base "api/backend/group_entries"
                                  (when group-id `(("in" . ,group-id)))))
          (groups (mapcar (lambda (g) (alist-get 'id g)) (nth 0 resp)))
@@ -552,7 +679,7 @@ alists for objects and lists for arrays."
 
 (defun stex--mathhub-archive-entries (archive-id &optional path)
   "Return (DIR-REL-PATHS . FILE-REL-PATHS) in ARCHIVE-ID at PATH."
-  (let* ((base (stex--server-http-url))
+  (let* ((base (stex--mathhub-base-url))
          (resp (stex--http-post base "api/backend/archive_entries"
                                  `(("archive" . ,archive-id)
                                    ("path" . ,path))))
@@ -725,7 +852,10 @@ command was called from."
   "Build the tag string for NODE in the MathHub tree.
 File nodes are buttons that open the file; group/archive/dir nodes
 are plain text -- expand/collapse them via `tree-widget's own
-icon/keys, same as any other tree-widget node."
+icon/keys, same as any other tree-widget node.  Every kind of tag
+carries a `stex--mathhub-node' text property either way, so commands
+like `stex-mathhub-tree-narrow' can tell what's on the current line
+regardless of node kind."
   (let ((label (stex--mathhub-node-label node)))
     (if (eq (plist-get node :kind) 'file)
         (with-temp-buffer
@@ -739,10 +869,32 @@ icon/keys, same as any other tree-widget node."
                                  (plist-get node :archive)
                                  (plist-get node :path)))))
           (buffer-string))
-      label)))
+      (propertize label 'stex--mathhub-node node))))
 
 (defvar-local stex--mathhub-tree-roots nil
   "Root nodes of the current `stex-mathhub-tree-mode' buffer.")
+
+(defvar-local stex--mathhub-tree-history nil
+  "Stack of previous `stex--mathhub-tree-roots' values.
+Pushed to by `stex-mathhub-tree-narrow', popped by
+`stex-mathhub-tree-up'.")
+
+(defun stex--mathhub-tree-node-at-point ()
+  "Return the MathHub node for the current line, or nil.
+Looks anywhere on the line, not just exactly on the tag text --
+forgiving the way `dired' is about where on a line you press a key."
+  (let ((pos (text-property-not-all (line-beginning-position) (line-end-position)
+                                     'stex--mathhub-node nil)))
+    (and pos (get-char-property pos 'stex--mathhub-node))))
+
+(defun stex--mathhub-tree-header ()
+  "Build the header-line text describing the current tree scope."
+  (concat "𝖥𝖫∀𝖬∫ MathHub — "
+          (if stex--mathhub-tree-history
+              (format "%s  [%s]"
+                      (stex--mathhub-node-label (car stex--mathhub-tree-roots))
+                      (plist-get (car stex--mathhub-tree-roots) :kind))
+            "whole tree")))
 
 (defun stex--mathhub-tree-widget (node)
   "Build a (not yet inserted) `tree-widget' spec for NODE.
@@ -763,26 +915,89 @@ recursively."
 
 (defun stex--mathhub-tree-render ()
   "(Re)populate the current MathHub tree buffer from its root nodes."
-  (let ((inhibit-read-only t))
+  (let ((inhibit-read-only t)
+        (line (line-number-at-pos)))
     (erase-buffer)
     (mapc (lambda (root) (widget-create (stex--mathhub-tree-widget root)))
           stex--mathhub-tree-roots)
-    (goto-char (point-min))))
+    (setq header-line-format (stex--mathhub-tree-header))
+    (goto-char (point-min))
+    (forward-line (1- line))))
+
+(defun stex-mathhub-tree-narrow ()
+  "Narrow the MathHub tree to the group/archive on the current line."
+  (interactive)
+  (let ((node (stex--mathhub-tree-node-at-point)))
+    (unless (and node (memq (plist-get node :kind) '(group archive)))
+      (user-error "𝖥𝖫∀𝖬∫: point at a group or archive to narrow to it"))
+    (push stex--mathhub-tree-roots stex--mathhub-tree-history)
+    (setq stex--mathhub-tree-roots (list node))
+    (stex--mathhub-tree-render)))
+
+(defun stex-mathhub-tree-up ()
+  "Undo the last `stex-mathhub-tree-narrow', restoring the wider view."
+  (interactive)
+  (unless stex--mathhub-tree-history
+    (user-error "𝖥𝖫∀𝖬∫: already showing the widest view"))
+  (setq stex--mathhub-tree-roots (pop stex--mathhub-tree-history))
+  (stex--mathhub-tree-render))
+
+(defun stex-mathhub-tree-open ()
+  "Open the file on the current line, if there is one."
+  (interactive)
+  (let ((node (stex--mathhub-tree-node-at-point)))
+    (unless (and node (eq (plist-get node :kind) 'file))
+      (user-error "𝖥𝖫∀𝖬∫: no file on this line"))
+    (find-file (stex--mathhub-local-path (plist-get node :archive)
+                                          (plist-get node :path)))))
+
+(defun stex--mathhub-tree-target-buffer ()
+  "Return the buffer a MathHub tree action should act on.
+The most-recently-used window's buffer, excluding the tree's own
+window -- the usual trick for sidebar-style buffers, since the tree
+buffer itself is obviously never a sensible target."
+  (let ((win (get-mru-window nil nil 'not-selected)))
+    (if win (window-buffer win)
+      (user-error "𝖥𝖫∀𝖬∫: no other window to insert into"))))
+
+(defun stex-mathhub-tree-insert-usemodule ()
+  "Insert a \\usemodule reference for the file on the current line.
+Inserts into the most-recently-used other window's buffer -- see
+`stex--mathhub-tree-target-buffer'."
+  (interactive)
+  (let ((node (stex--mathhub-tree-node-at-point)))
+    (unless (and node (eq (plist-get node :kind) 'file))
+      (user-error "𝖥𝖫∀𝖬∫: no file on this line"))
+    (stex--insert-usemodule (stex--mathhub-tree-target-buffer)
+                             (plist-get node :archive)
+                             (string-remove-suffix ".tex" (plist-get node :path)))))
 
 (define-derived-mode stex-mathhub-tree-mode special-mode "sTeX-MathHub"
   "Major mode for browsing local MathHub archives as a tree.
 \\{stex-mathhub-tree-mode-map}"
   (setq buffer-read-only t))
 
+(define-key stex-mathhub-tree-mode-map "n" #'stex-mathhub-tree-narrow)
+(define-key stex-mathhub-tree-mode-map "^" #'stex-mathhub-tree-up)
+(define-key stex-mathhub-tree-mode-map "o" #'stex-mathhub-tree-open)
+(define-key stex-mathhub-tree-mode-map "u" #'stex-mathhub-tree-insert-usemodule)
+
 ;;;###autoload
 (defun stex-mathhub-tree ()
   "Show the local MathHub archive collection as a navigable tree.
 Unlike `stex-mathhub-open-file'/`stex-mathhub-insert-usemodule' (a
 one-shot drill-down), this opens a persistent buffer showing the
-whole MathHub at once; expand groups/archives/directories to browse,
-and click or activate a file entry to open it.  See
-`stex-mathhub-tree-side' and `stex-mathhub-tree-width' to configure
-placement."
+whole MathHub at once, reconfigurable in place:
+  n  `stex-mathhub-tree-narrow' -- narrow to the group/archive at point
+  ^  `stex-mathhub-tree-up' -- undo the last narrow
+  o  `stex-mathhub-tree-open' -- open the file on the current line
+  u  `stex-mathhub-tree-insert-usemodule' -- \\usemodule for it, in
+     whatever window you were last in
+  g  `revert-buffer' -- full reset to the whole MathHub
+Also works with no `.tex' file open at all, launching a standalone
+`flams' connection via `stex-mathhub-root' if nothing is already
+connected -- see `stex--ensure-mathhub-server'.  Placement is
+configured by `stex-mathhub-tree-side'/`stex-mathhub-tree-width'."
   (interactive)
   (let* ((entries (stex--mathhub-group-entries nil))
          (roots (append (mapcar (lambda (g) (list :kind 'group :id g)) (car entries))
@@ -791,6 +1006,7 @@ placement."
     (with-current-buffer buf
       (stex-mathhub-tree-mode)
       (setq-local stex--mathhub-tree-roots roots)
+      (setq-local stex--mathhub-tree-history nil)
       (setq-local revert-buffer-function (lambda (&rest _) (stex-mathhub-tree)))
       (stex--mathhub-tree-render))
     (if stex-mathhub-tree-side

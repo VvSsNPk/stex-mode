@@ -61,13 +61,27 @@ MathHub browsing is **local archives only** -- it asks the connected
 configuration needed on the Emacs side). `stex-mathhub-open-file` and
 `stex-mathhub-insert-usemodule` drill down through archive groups,
 archives, directories and files one `completing-read` prompt at a time;
-`stex-mathhub-tree` instead shows the whole thing at once, as a persistent
-`tree-widget`-based tree in a side window (`stex-mathhub-tree-side`,
-`stex-mathhub-tree-width`, default: right, 25% of frame width) --
-expand groups/archives/directories to browse, activate a file to open it.
-There's no remote-archive browsing/install, and no fuzzy module search
-(that one's FLAMS's own web UI, not a documented REST endpoint -- nothing
-to reuse without embedding a browser).
+`stex-mathhub-tree` instead shows the whole thing at once, as one
+persistent, `dired`-like `tree-widget`-based tree in a side window
+(`stex-mathhub-tree-side`/`stex-mathhub-tree-width`, default: right, 25%
+of frame width), reconfigurable in place instead of needing separate
+commands:
+
+| Key | Command | What it does |
+|-----|---------|---------------|
+| `n` | `stex-mathhub-tree-narrow` | Narrow the tree to the group/archive at point |
+| `^` | `stex-mathhub-tree-up` | Undo the last narrow |
+| `o` | `stex-mathhub-tree-open` | Open the file on the current line |
+| `u` | `stex-mathhub-tree-insert-usemodule` | `\usemodule` for it, into whatever window you were last in |
+| `g` | `revert-buffer` | Full reset to the whole MathHub |
+
+None of the MathHub commands need a `.tex` file open at all -- if nothing
+is already connected anywhere (in any buffer, this one or not), they
+launch a standalone `flams` connection against `stex-mathhub-root` and
+wait for it (`stex-mathhub-connect-timeout`). There's no remote-archive
+browsing/install, and no fuzzy module search (that one's FLAMS's own web
+UI, not a documented REST endpoint -- nothing to reuse without embedding a
+browser).
 
 ## Configuration
 
@@ -82,6 +96,13 @@ to reuse without embedding a browser).
   width).
 - `stex-mathhub-tree-side` / `stex-mathhub-tree-width` -- side-window
   placement for `stex-mathhub-tree` (default: right, 25% of frame width).
+- `stex-mathhub-root` -- directory to run a standalone `flams` connection
+  in for MathHub browsing with no `.tex` file open; irrelevant once
+  something is already connected (default: unset -- MathHub commands
+  error, telling you to set this or open a `.tex` file, if nothing's
+  connected and this is unset).
+- `stex-mathhub-connect-timeout` -- seconds to wait for that standalone
+  connection to come up (default: 20).
 - `stex-preview-auto-open` -- whether `stex-mode` should open a browser
   automatically whenever the server reports a fresh HTML build, rather
   than just messaging that one's ready (default: off, to avoid surprise
