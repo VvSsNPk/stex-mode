@@ -126,3 +126,10 @@ doesn't fetch anything for you). See `stex-mode.el`'s Commentary header and
 - `vscode/` -- FLAMS's VS Code/VSCodium extension, vendored here as the
   fuller-featured reference implementation `stex-mode.el` follows. Not an
   Emacs dependency; see `vscode/README.md`.
+
+## License
+
+`stex-mode.el` is licensed under the GNU General Public License v3.0 or
+later -- see [`LICENSE`](LICENSE), the standard choice for Emacs Lisp
+packages. `vscode/` carries its own license (also GPL-3.0, see
+[`vscode/LICENSE`](vscode/LICENSE)) as part of the upstream FLAMS project.
