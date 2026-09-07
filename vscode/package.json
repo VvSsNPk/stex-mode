@@ -1,0 +1,218 @@
+{
+  "name": "flams",
+  "displayName": "𝖥𝖫∀𝖬∫ - Flexiformal Annotation Management System",
+  "description": "IDE for the FLAMS system and sTeX",
+  "version": "0.0.6",
+  "license": "GPL3",
+  "publisher": "kwarc",
+  "icon": "img/flams.png",
+  "repository": {
+    "type": "git",
+    "url": "github:KWARC/FLAMS"
+  },
+  "categories": [
+    "Programming Languages",
+    "Language Packs"
+  ],
+  "bugs": {
+    "url": "https://github.com/FlexiFormal/FLAMS/issues"
+  },
+  "activationEvents": [
+    "workspaceContains:**/*.tex",
+    "onUri"
+  ],
+  "editor.semanticHighlighting.enabled": true,
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "flams-viewcontainer",
+          "title": "FLAMS Tools",
+          "icon": "img/flams.svg",
+          "when": "flams.loaded"
+        }
+      ]
+    },
+    "views": {
+      "flams-viewcontainer": [
+        {
+          "id": "flams-mathhub",
+          "name": "Math Archives",
+          "icon": "img/flams.svg",
+          "contextualTitle": "Math Archives",
+          "when": "flams.loaded"
+        },
+        {
+          "id": "flams-tools",
+          "type": "webview",
+          "name": "FLAMS Tools",
+          "icon": "img/flams.svg",
+          "contextualTitle": "FLAMS Functionality",
+          "when": "flams.loaded"
+        },
+        {
+          "id": "flams-document",
+          "type": "webview",
+          "name": "Current document",
+          "icon": "img/flams.svg",
+          "contextualTitle": "FLAMS Functionality",
+          "when": "flams.loaded"
+        },
+        {
+          "id": "flams-search",
+          "type": "webview",
+          "name": "Search",
+          "icon": "img/flams.svg",
+          "contextualTitle": "FLAMS Search",
+          "when": "flams.loaded"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "flams.mathhub.install",
+          "group": "inline",
+          "when": "view == flams-mathhub && viewItem == remote"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "flams.buildAll",
+          "group": "navigation",
+          "when": "editorLangId =~ /^tex$|^latex$|^latex-expl3$/"
+        },
+        {
+          "command": "flams.buildOne",
+          "group": "navigation",
+          "when": "editorLangId =~ /^tex$|^latex$|^latex-expl3$/"
+        },
+        {
+          "command": "flams.exportTex",
+          "group": "navigation",
+          "when": "editorLangId =~ /^tex$|^latex$|^latex-expl3$/"
+        },
+        {
+          "command": "flams.exportHtml",
+          "group": "navigation",
+          "when": "editorLangId =~ /^tex$|^latex$|^latex-expl3$/"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "flams.mathhub.install",
+        "title": "Install",
+        "icon": {
+          "light": "img/cloud-download-light.svg",
+          "dark": "img/cloud-download-dark.svg"
+        }
+      },
+      {
+        "command": "flams.buildAll",
+        "title": "Build recursively",
+        "icon": "$(testing-run-all-icon)"
+      },
+      {
+        "command": "flams.buildOne",
+        "title": "Build file",
+        "icon": "$(testing-run-icon)"
+      },
+      {
+        "command": "flams.exportTex",
+        "title": "Export standalone tex",
+        "icon": "$(package)"
+      },
+      {
+        "command": "flams.exportHtml",
+        "title": "Export standalone HTML",
+        "icon": "$(preview)"
+      }
+    ],
+    "configuration": [
+      {
+        "title": "FLAMS",
+        "properties": {
+          "flams.preview": {
+            "type": "string",
+            "default": "on save",
+            "markdownDescription": "When to parse the sTeX document and show the HTML preview window",
+            "enum": [
+              "on save",
+              "on edit",
+              "manually"
+            ],
+            "enumDescriptions": [
+              "Every time a .tex file is saved (whether changed or not)",
+              "Every time a .tex file is edited (dangerous!)",
+              "Only manually"
+            ]
+          },
+          "flams.settings_toml": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Path to FLAMS settings.toml (optional)"
+          },
+          "flams.flams_path": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Path to your flams executable"
+          },
+          "flams.remote_flams": {
+            "type": "string",
+            "default": "https://mathhub.info",
+            "markdownDescription": "URL of your favorite remote flams instance"
+          }
+        }
+      }
+    ]
+  },
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "ignore-this": "wasm-pack build --target nodejs",
+    "vscode:prepublish": "npm run package",
+    "build": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "extensionDependencies": [
+    "james-yu.latex-workshop"
+  ],
+  "ignoreDepDependencies": {
+    "copy-webpack-plugin": "^12.0.2"
+  },
+  "devDependencies": {
+    "@types/follow-redirects": "^1.14.4",
+    "@types/node": "26.0.0",
+    "@types/vscode": "^1.94.0",
+    "@types/yauzl": "^3.4.0",
+    "@typescript-eslint/eslint-plugin": "^8.62.0",
+    "@typescript-eslint/parser": "^8.62.0",
+    "@vscode/test-electron": "^3.0.0",
+    "eslint": "^10.5.0",
+    "ts-loader": "^9.6.2",
+    "typescript": "^6.0.3",
+    "webpack": "^5.107.2",
+    "webpack-cli": "^7.0.3"
+  },
+  "dependencies": {
+    "@flexiformal/ftml-backend": "=0.0.14",
+    "@octokit/rest": "^22.0.1",
+    "@vscode-elements/elements": "^2.5.1",
+    "@vscode/codicons": "^0.0.45",
+    "child_process": "^1.0.2",
+    "follow-redirects": "^1.16.0",
+    "fs": "^0.0.2",
+    "mkdirp": "^3.0.1",
+    "vscode-languageclient": "^10.0.1",
+    "yauzl": "^3.4.0"
+  }
+}

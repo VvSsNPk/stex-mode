@@ -1,0 +1,19 @@
+# Emacs
+*.elc
+\#*\#
+.\#*
+
+# Nix build output symlinks
+result
+result-*
+
+# vscode/ extension build artifacts and dependencies -- not source,
+# regenerate with `npm install` / `npm run build` inside vscode/
+vscode/node_modules/
+vscode/dist/
+vscode/out/
+vscode/*.vsix
+vscode/.vscode-test/
+
+# Unrelated local scratch file, not part of the project
+main.txt
