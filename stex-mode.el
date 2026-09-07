@@ -1,11 +1,11 @@
-;;; stex-mode.el --- sTeX/FLAMS support via eglot -*- lexical-binding: t; -*-
+;;; stex-mode.el --- FLAMS/sTeX support via eglot -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 royaleinstein
 
 ;; Author: royaleinstein
 ;; Keywords: languages, tex
 ;; URL: https://github.com/KWARC/FLAMS
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "30.1"))
 ;; Version: 0.1.0
 
 ;; This file is not part of GNU Emacs.

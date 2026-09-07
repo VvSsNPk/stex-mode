@@ -128,8 +128,9 @@ you specifically what's missing or outdated if the check fails.
 
 ## Requirements
 
-- Emacs 29.1+ (for built-in `eglot`/`jsonrpc`; no external Emacs package
-  dependencies).
+- Emacs 30.1+ (for built-in `eglot`/`jsonrpc`, specifically the public
+  `eglot-path-to-uri`, which isn't available before 30.1; no external
+  Emacs package dependencies).
 - No build step -- it's a single file, `stex-mode.el`.
 
 Verify it loads cleanly with:
