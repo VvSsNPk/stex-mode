@@ -52,8 +52,13 @@
 ;; your locally configured MathHub archives (queried live from the
 ;; connected `flams' server, so there is nothing to configure) and
 ;; either visit the chosen file or insert a \usemodule reference to it
-;; at point.  Only local archives are browsed -- there is no
-;; remote-archive browsing or install-from-remote support.
+;; at point, one `completing-read' drill-down at a time.
+;; `stex-mathhub-tree' instead shows the whole local MathHub as a
+;; persistent, expandable tree in a side window (see
+;; `stex-mathhub-tree-side'), for browsing without knowing what you're
+;; looking for ahead of time.  Only local archives are browsed in any
+;; of these -- there is no remote-archive browsing or
+;; install-from-remote support.
 ;;
 ;; Call hierarchy and document symbols are eglot's own generic LSP
 ;; features, not FLAMS-specific -- `stex-show-call-hierarchy' (a thin
@@ -88,6 +93,8 @@
 (require 'seq)
 (require 'url)
 (require 'browse-url)
+(require 'button)
+(require 'tree-widget)
 
 (defgroup stex nil
   "Support for sTeX/FLAMS via eglot."
@@ -123,6 +130,25 @@ sidebar), or nil to fall back to eglot's normal buffer placement
   "Width of the `stex-show-call-hierarchy' side window.
 A float between 0 and 1 is a fraction of the frame width; an integer
 is a number of columns.  Only used when `stex-call-hierarchy-side' is
+non-nil."
+  :type '(choice (float :tag "Fraction of frame width")
+                  (integer :tag "Columns"))
+  :group 'stex)
+
+(defcustom stex-mathhub-tree-side 'right
+  "Which side to show `stex-mathhub-tree' results on.
+One of `left' or `right' for a dedicated side window (like a
+sidebar), or nil to fall back to Emacs's normal buffer placement
+\(wherever `display-buffer' would otherwise put it)."
+  :type '(choice (const :tag "Left side window" left)
+                  (const :tag "Right side window" right)
+                  (const :tag "Default placement" nil))
+  :group 'stex)
+
+(defcustom stex-mathhub-tree-width 0.25
+  "Width of the `stex-mathhub-tree' side window.
+A float between 0 and 1 is a fraction of the frame width; an integer
+is a number of columns.  Only used when `stex-mathhub-tree-side' is
 non-nil."
   :type '(choice (float :tag "Fraction of frame width")
                   (integer :tag "Columns"))
@@ -329,6 +355,7 @@ otherwise put them."
     (define-key prefix "p" #'stex-preview-browser)
     (define-key prefix "o" #'stex-mathhub-open-file)
     (define-key prefix "u" #'stex-mathhub-insert-usemodule)
+    (define-key prefix "t" #'stex-mathhub-tree)
     (define-key prefix "h" #'stex-show-call-hierarchy)
     (define-key prefix "i" #'imenu)
     (define-key map (kbd "C-c C-x") prefix)
@@ -347,6 +374,7 @@ using it).
 \\[stex-preview-browser]  `stex-preview-browser'
 \\[stex-mathhub-open-file]  `stex-mathhub-open-file'
 \\[stex-mathhub-insert-usemodule]  `stex-mathhub-insert-usemodule'
+\\[stex-mathhub-tree]  `stex-mathhub-tree'
 \\[stex-show-call-hierarchy]  `stex-show-call-hierarchy' (wraps eglot's
   own `eglot-show-call-hierarchy'; requires flams to advertise
   :callHierarchyProvider)
@@ -644,6 +672,137 @@ command was called from."
          (rel-path (stex--choose-file archive))
          (module-path (string-remove-suffix ".tex" rel-path)))
     (stex--insert-usemodule buffer archive module-path)))
+
+;;; MathHub tree view
+
+;; Unlike `stex-mathhub-open-file'/`stex-mathhub-insert-usemodule' (a
+;; one-shot `completing-read' drill-down), `stex-mathhub-tree' shows
+;; the whole local MathHub as a persistent, incrementally-expandable
+;; tree, built with `tree-widget' -- the same library eglot's own
+;; `eglot-show-call-hierarchy' uses, just for the whole archive
+;; collection instead of one file's call graph.
+;;
+;; Each node is a plist: (:kind group :id ID), (:kind archive :id ID),
+;; (:kind dir :archive ID :path REL-PATH), or
+;; (:kind file :archive ID :path REL-PATH).  Children are only fetched
+;; (over HTTP, via the same functions the drill-down commands use)
+;; when a node is actually expanded.
+
+(defun stex--mathhub-node-children (node)
+  "Return (CONTAINER-NODES . LEAF-NODES) that NODE expands to."
+  (pcase (plist-get node :kind)
+    ('group
+     (let ((entries (stex--mathhub-group-entries (plist-get node :id))))
+       (cons (mapcar (lambda (g) (list :kind 'group :id g)) (car entries))
+             (mapcar (lambda (a) (list :kind 'archive :id a)) (cdr entries)))))
+    ('archive
+     (let ((entries (stex--mathhub-archive-entries (plist-get node :id))))
+       (cons (mapcar (lambda (d) (list :kind 'dir :archive (plist-get node :id) :path d))
+                      (car entries))
+             (mapcar (lambda (f) (list :kind 'file :archive (plist-get node :id) :path f))
+                      (cdr entries)))))
+    ('dir
+     (let ((entries (stex--mathhub-archive-entries (plist-get node :archive)
+                                                     (plist-get node :path))))
+       (cons (mapcar (lambda (d) (list :kind 'dir :archive (plist-get node :archive) :path d))
+                      (car entries))
+             (mapcar (lambda (f) (list :kind 'file :archive (plist-get node :archive) :path f))
+                      (cdr entries)))))
+    ('file (cons nil nil))))
+
+(defun stex--mathhub-node-label (node)
+  "Return NODE's display label (its id/path's last path segment)."
+  (stex--mathhub-basename
+   (pcase (plist-get node :kind)
+     ((or 'group 'archive) (plist-get node :id))
+     ((or 'dir 'file) (plist-get node :path)))))
+
+(define-button-type 'stex--mathhub-tree-item
+  'follow-link t
+  'face 'font-lock-function-name-face)
+
+(defun stex--mathhub-tree-tag (node)
+  "Build the tag string for NODE in the MathHub tree.
+File nodes are buttons that open the file; group/archive/dir nodes
+are plain text -- expand/collapse them via `tree-widget's own
+icon/keys, same as any other tree-widget node."
+  (let ((label (stex--mathhub-node-label node)))
+    (if (eq (plist-get node :kind) 'file)
+        (with-temp-buffer
+          (insert-text-button
+           label
+           :type 'stex--mathhub-tree-item
+           'stex--mathhub-node node
+           'help-echo "mouse-1, RET: open file"
+           'action (lambda (_btn)
+                     (find-file (stex--mathhub-local-path
+                                 (plist-get node :archive)
+                                 (plist-get node :path)))))
+          (buffer-string))
+      label)))
+
+(defvar-local stex--mathhub-tree-roots nil
+  "Root nodes of the current `stex-mathhub-tree-mode' buffer.")
+
+(defun stex--mathhub-tree-widget (node)
+  "Build a (not yet inserted) `tree-widget' spec for NODE.
+Children are fetched lazily: NODE's `:expander' only calls
+`stex--mathhub-node-children' (an HTTP request) when the widget is
+actually expanded, and converts each child node the same way,
+recursively."
+  (let ((w (widget-convert
+            'tree-widget
+            :tag (stex--mathhub-tree-tag node)
+            :expander
+            (lambda (_widget)
+              (let ((children (stex--mathhub-node-children node)))
+                (append (mapcar #'stex--mathhub-tree-widget (car children))
+                        (mapcar #'stex--mathhub-tree-widget (cdr children))))))))
+    (widget-put w :empty-icon (widget-get w :leaf-icon))
+    w))
+
+(defun stex--mathhub-tree-render ()
+  "(Re)populate the current MathHub tree buffer from its root nodes."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (mapc (lambda (root) (widget-create (stex--mathhub-tree-widget root)))
+          stex--mathhub-tree-roots)
+    (goto-char (point-min))))
+
+(define-derived-mode stex-mathhub-tree-mode special-mode "sTeX-MathHub"
+  "Major mode for browsing local MathHub archives as a tree.
+\\{stex-mathhub-tree-mode-map}"
+  (setq buffer-read-only t))
+
+;;;###autoload
+(defun stex-mathhub-tree ()
+  "Show the local MathHub archive collection as a navigable tree.
+Unlike `stex-mathhub-open-file'/`stex-mathhub-insert-usemodule' (a
+one-shot drill-down), this opens a persistent buffer showing the
+whole MathHub at once; expand groups/archives/directories to browse,
+and click or activate a file entry to open it.  See
+`stex-mathhub-tree-side' and `stex-mathhub-tree-width' to configure
+placement."
+  (interactive)
+  (let* ((entries (stex--mathhub-group-entries nil))
+         (roots (append (mapcar (lambda (g) (list :kind 'group :id g)) (car entries))
+                         (mapcar (lambda (a) (list :kind 'archive :id a)) (cdr entries))))
+         (buf (get-buffer-create "*sTeX MathHub*")))
+    (with-current-buffer buf
+      (stex-mathhub-tree-mode)
+      (setq-local stex--mathhub-tree-roots roots)
+      (setq-local revert-buffer-function (lambda (&rest _) (stex-mathhub-tree)))
+      (stex--mathhub-tree-render))
+    (if stex-mathhub-tree-side
+        (let ((display-buffer-alist
+               (cons `(,(regexp-quote (buffer-name buf))
+                       (display-buffer-in-side-window)
+                       (side . ,stex-mathhub-tree-side)
+                       (window-width . ,stex-mathhub-tree-width)
+                       (slot . 0))
+                     display-buffer-alist)))
+          (pop-to-buffer buf))
+      (pop-to-buffer buf))))
 
 (provide 'stex-mode)
 

@@ -6,7 +6,7 @@
 # Nix build output symlinks
 result
 result-*
-
+/eldev
 # vscode/ extension build artifacts and dependencies -- not source,
 # regenerate with `npm install` / `npm run build` inside vscode/
 vscode/*
