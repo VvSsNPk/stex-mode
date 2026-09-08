@@ -1,5 +1,3 @@
-;;; stex-mode.el --- FLAMS/sTeX support via eglot -*- lexical-binding: t; -*-
-
 ;; Copyright (C) 2026 royaleinstein
 
 ;; Author: royaleinstein
