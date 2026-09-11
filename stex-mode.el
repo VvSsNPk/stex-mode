@@ -58,8 +58,12 @@
 ;; keybinding list).  None of the MathHub commands need a `.tex' file
 ;; open at all: if nothing is already connected anywhere, they launch
 ;; a standalone `flams' connection against `stex-mathhub-root' and
-;; wait for it.  Only local archives are browsed in any of these --
-;; there is no remote-archive browsing or install-from-remote support.
+;; wait for it.  `stex-mathhub-new-archive' creates a new MathHub
+;; archive (a direct port of the "New Math Archive" flow in
+;; vscode/src/ts/commands.ts); the tree, if open, refreshes itself
+;; once flams confirms it via the flams/updateMathHub notification.
+;; Only local archives are browsed/created in any of these -- there is
+;; no remote-archive browsing or install-from-remote support.
 ;;
 ;; Call hierarchy and document symbols are eglot's own generic LSP
 ;; features, not FLAMS-specific -- `stex-show-call-hierarchy' (a thin
@@ -341,6 +345,21 @@ URL identifies some document, not necessarily the current buffer's
 file, since the server decides when to rebuild on its own schedule."
   (stex--handle-html-result (stex-eglot-server-http-url server) url))
 
+(defun stex--handle-update-mathhub ()
+  "React to a flams/updateMathHub notice by refreshing the MathHub tree.
+Only does anything if a `*sTeX MathHub*' buffer already exists --
+harmless, and does nothing, otherwise."
+  (when (get-buffer "*sTeX MathHub*")
+    (stex-mathhub-tree)))
+
+(cl-defmethod eglot-handle-notification
+  ((_server stex-eglot-server) (_method (eql flams/updateMathHub))
+   &key &allow-other-keys)
+  "Refresh the MathHub tree buffer, if any, when the server signals a change.
+flams sends flams/updateMathHub whenever MathHub's contents change --
+e.g. after `stex-mathhub-new-archive' or an install."
+  (stex--handle-update-mathhub))
+
 ;;;###autoload
 (defun stex-show-call-hierarchy ()
   "Show call hierarchy for the symbol at point.
@@ -376,6 +395,7 @@ otherwise put them."
     (define-key prefix "o" #'stex-mathhub-open-file)
     (define-key prefix "u" #'stex-mathhub-insert-usemodule)
     (define-key prefix "t" #'stex-mathhub-tree)
+    (define-key prefix "a" #'stex-mathhub-new-archive)
     (define-key prefix "h" #'stex-show-call-hierarchy)
     (define-key prefix "i" #'imenu)
     (define-key map (kbd "C-c C-x") prefix)
@@ -395,6 +415,7 @@ using it).
 \\[stex-mathhub-open-file]  `stex-mathhub-open-file'
 \\[stex-mathhub-insert-usemodule]  `stex-mathhub-insert-usemodule'
 \\[stex-mathhub-tree]  `stex-mathhub-tree'
+\\[stex-mathhub-new-archive]  `stex-mathhub-new-archive'
 \\[stex-show-call-hierarchy]  `stex-show-call-hierarchy' (wraps eglot's
   own `eglot-show-call-hierarchy'; requires flams to advertise
   :callHierarchyProvider)
@@ -798,6 +819,27 @@ command was called from."
          (module-path (string-remove-suffix ".tex" rel-path)))
     (stex--insert-usemodule buffer archive module-path)))
 
+;;;###autoload
+(defun stex-mathhub-new-archive ()
+  "Create a new MathHub archive.
+Prompts for an archive id (e.g. \"My/Archive/Name\") and a URL base
+\(where you plan to host it), then sends flams/newArchive -- a direct
+port of `new_archive' in vscode/src/ts/commands.ts, including its
+default URL base.  Works with no `.tex' file open, same as the other
+MathHub commands: launches a standalone connection via
+`stex-mathhub-root' if nothing is connected yet."
+  (interactive)
+  (let ((server (stex--ensure-mathhub-server)))
+    (let ((archive (string-trim
+                     (read-string "New MathHub archive (e.g. My/Archive/Name): ")))
+          (urlbase (string-trim
+                    (read-string "Archive URL base: " "http://mathhub.info"))))
+      (when (string-empty-p archive)
+        (user-error "𝖥𝖫∀𝖬∫: archive name can't be empty"))
+      (jsonrpc-notify server "flams/newArchive"
+                       (list :archive archive :urlbase urlbase))
+      (message "𝖥𝖫∀𝖬∫: requested new archive %s" archive))))
+
 ;;; MathHub tree view
 
 ;; Unlike `stex-mathhub-open-file'/`stex-mathhub-insert-usemodule' (a
@@ -979,6 +1021,7 @@ Inserts into the most-recently-used other window's buffer -- see
 (define-key stex-mathhub-tree-mode-map "^" #'stex-mathhub-tree-up)
 (define-key stex-mathhub-tree-mode-map "o" #'stex-mathhub-tree-open)
 (define-key stex-mathhub-tree-mode-map "u" #'stex-mathhub-tree-insert-usemodule)
+(define-key stex-mathhub-tree-mode-map "a" #'stex-mathhub-new-archive)
 
 ;;;###autoload
 (defun stex-mathhub-tree ()
@@ -991,6 +1034,8 @@ whole MathHub at once, reconfigurable in place:
   o  `stex-mathhub-tree-open' -- open the file on the current line
   u  `stex-mathhub-tree-insert-usemodule' -- \\usemodule for it, in
      whatever window you were last in
+  a  `stex-mathhub-new-archive' -- create a new archive; the tree
+     refreshes itself once flams confirms it (flams/updateMathHub)
   g  `revert-buffer' -- full reset to the whole MathHub
 Also works with no `.tex' file open at all, launching a standalone
 `flams' connection via `stex-mathhub-root' if nothing is already

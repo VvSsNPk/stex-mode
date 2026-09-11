@@ -44,6 +44,7 @@ Enabling it in a buffer:
 | `C-c C-x o` | `stex-mathhub-open-file`          | Drill down local MathHub archives, open a file |
 | `C-c C-x u` | `stex-mathhub-insert-usemodule`   | Drill down local MathHub archives, insert `\usemodule` |
 | `C-c C-x t` | `stex-mathhub-tree`               | Whole local MathHub as a persistent tree (side window) |
+| `C-c C-x a` | `stex-mathhub-new-archive`        | Create a new MathHub archive |
 | `C-c C-x h` | `stex-show-call-hierarchy`        | Call hierarchy for the symbol at point (side window) |
 | `C-c C-x i` | `imenu`                           | Jump to a symbol in the current file |
 
@@ -73,14 +74,23 @@ commands:
 | `^` | `stex-mathhub-tree-up` | Undo the last narrow |
 | `o` | `stex-mathhub-tree-open` | Open the file on the current line |
 | `u` | `stex-mathhub-tree-insert-usemodule` | `\usemodule` for it, into whatever window you were last in |
+| `a` | `stex-mathhub-new-archive` | Create a new archive (see below) |
 | `g` | `revert-buffer` | Full reset to the whole MathHub |
+
+`stex-mathhub-new-archive` creates a new MathHub archive -- prompts for an
+archive id (e.g. `My/Archive/Name`) and a URL base, then sends
+`flams/newArchive` (a direct port of the "New Math Archive" flow in
+`vscode/src/ts/commands.ts`). The tree, if open, refreshes itself
+automatically once `flams` confirms the change (`flams/updateMathHub`).
 
 None of the MathHub commands need a `.tex` file open at all -- if nothing
 is already connected anywhere (in any buffer, this one or not), they
 launch a standalone `flams` connection against `stex-mathhub-root` and
 wait for it (`stex-mathhub-connect-timeout`). There's no remote-archive
-browsing/install, and no fuzzy module search (that one's FLAMS's own web
-UI, not a documented REST endpoint -- nothing to reuse without embedding a
+browsing/install (installing an *existing* remote archive, that is --
+distinct from creating a brand new one, which is local-only and needs no
+remote server), and no fuzzy module search (that one's FLAMS's own web UI,
+not a documented REST endpoint -- nothing to reuse without embedding a
 browser).
 
 ## Configuration
