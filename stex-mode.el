@@ -62,14 +62,19 @@
 ;; archive (a direct port of the "New Math Archive" flow in
 ;; vscode/src/ts/commands.ts); the tree, if open, refreshes itself
 ;; once flams confirms it via the flams/updateMathHub notification.
-;; `stex-mathhub-update' git-pulls every local archive found under
-;; `stex--mathhub-settings' (asynchronously, one at a time), skipping
-;; -- rather than hanging or aborting the whole run on -- any archive
-;; whose pull would need a password.  There is no flams/vscode
-;; equivalent to this; it's a from-scratch port of a plain git-pull
-;; script.  Only local archives are browsed/created/updated in any of
-;; these -- there is no remote-archive browsing or install-from-remote
-;; support.
+;; `stex-mathhub-update' git-pulls local archives (asynchronously, one
+;; at a time), skipping -- rather than hanging or aborting the whole
+;; run on -- any archive whose pull would need a password.  With no
+;; prefix argument it updates everything under
+;; `stex--mathhub-settings'; with a prefix argument, just one archive
+;; you choose (`stex-mathhub-update-archive'); with two, a whole group
+;; (`stex-mathhub-update-group').  Inside the MathHub tree,
+;; `stex-mathhub-tree-update-at-point' updates whatever archive/group
+;; is on the current line without re-prompting.  There is no
+;; flams/vscode equivalent to any of this; it's a from-scratch port of
+;; a plain git-pull script.  Only local archives are
+;; browsed/created/updated in any of these -- there is no
+;; remote-archive browsing or install-from-remote support.
 ;;
 ;; Call hierarchy and document symbols are eglot's own generic LSP
 ;; features, not FLAMS-specific -- `stex-show-call-hierarchy' (a thin
@@ -423,7 +428,10 @@ using it).
 \\[stex-mathhub-insert-usemodule]  `stex-mathhub-insert-usemodule'
 \\[stex-mathhub-tree]  `stex-mathhub-tree'
 \\[stex-mathhub-new-archive]  `stex-mathhub-new-archive'
-\\[stex-mathhub-update]  `stex-mathhub-update' -- git-pull every local archive
+\\[stex-mathhub-update]  `stex-mathhub-update' -- git-pull every local
+  archive; with a prefix argument, one archive
+  (`stex-mathhub-update-archive') or, with two, a whole group
+  (`stex-mathhub-update-group') -- both also directly M-x-able
 \\[stex-show-call-hierarchy]  `stex-show-call-hierarchy' (wraps eglot's
   own `eglot-show-call-hierarchy'; requires flams to advertise
   :callHierarchyProvider)
@@ -634,6 +642,15 @@ anywhere yet."
   (stex--export-request "flams/htmlExport"
                          "Export packaged standalone HTML to directory: "))
 
+(defun stex--handle-preview-request-result (base result)
+  "Given BASE, the server's HTTP base URL, handle a flams/htmlRequest RESULT.
+For `stex-preview-browser'.  A named top-level function, not a
+closure -- see `stex--mathhub-tree-expand' for why, and how BASE gets
+bound in via `apply-partially' instead."
+  (if (and (stringp result) (not (string-empty-p result)))
+      (browse-url (stex--preview-url base result))
+    (message "𝖥𝖫∀𝖬∫: no preview available; building may have failed")))
+
 ;;;###autoload
 (defun stex-preview-browser ()
   "Request an HTML preview of the current file and open it in a browser."
@@ -644,11 +661,7 @@ anywhere yet."
     (message "𝖥𝖫∀𝖬∫: requesting preview...")
     (jsonrpc-async-request
      server "flams/htmlRequest" (list :uri uri)
-     :success-fn (lambda (result)
-                   (if (and (stringp result) (not (string-empty-p result)))
-                       (browse-url (stex--preview-url base result))
-                     (message
-                      "𝖥𝖫∀𝖬∫: no preview available; building may have failed")))
+     :success-fn (apply-partially #'stex--handle-preview-request-result base)
      :error-fn (jsonrpc-lambda (&key message &allow-other-keys)
                  (message "𝖥𝖫∀𝖬∫: preview request failed: %s" message)))))
 
@@ -769,22 +782,62 @@ happen to share one are ambiguous; not disambiguated in this version."
                        (stex--mathhub-archive-entries archive-id rel-path))
                      #'stex--mathhub-basename))
 
-(defun stex--mathhub-local-path (archive-id rel-path)
-  "Resolve ARCHIVE-ID/REL-PATH to a local file, or signal `user-error'.
-Looks for ARCHIVE-ID under each of `stex--mathhub-settings' in turn,
-the same convention `mathhub.ts' uses: <mathhub>/<archive-id
-segments>/source/<rel-path>."
-  (let ((segments (split-string archive-id "/" t)))
+(defun stex--choose-group ()
+  "Interactively choose a MathHub group id.
+Unlike `stex--choose-archive' (via `stex--drill-down', always
+descends to a leaf), this lets you stop at any group level: once
+you've descended into at least one group, a \".\" candidate lets you
+select the current group instead of continuing into a subgroup.  (No
+such option at the top level -- stopping there would just mean \"the
+whole MathHub\", already covered by `stex-mathhub-update' with no
+prefix argument.)  A group with no subgroups is returned immediately,
+without prompting.  Signals `user-error' if there are no groups at
+all."
+  (let ((current nil))
+    (catch 'chosen
+      (while t
+        (let ((groups (car (stex--mathhub-group-entries current))))
+          (when (and (null groups) (null current))
+            (user-error "𝖥𝖫∀𝖬∫: no MathHub groups found"))
+          (when (null groups)
+            (throw 'chosen current))
+          (let* ((here ".")
+                 (candidates (append (mapcar #'stex--mathhub-basename groups)
+                                      (when current (list here))))
+                 (choice (completing-read
+                          (format "MathHub group%s (%s = use this group): "
+                                  (if current (concat " [" current "]") "")
+                                  here)
+                          candidates nil t)))
+            (if (equal choice here)
+                (throw 'chosen current)
+              (setq current
+                    (nth (cl-position choice groups
+                                       :key #'stex--mathhub-basename :test #'string=)
+                         groups)))))))))
+
+(defun stex--mathhub-resolve-dir (id)
+  "Resolve mathhub ID (an archive or group id) to its local directory.
+Looks for ID under each of `stex--mathhub-settings' in turn, the same
+convention `mathhub.ts' uses: <mathhub>/<id segments>.  Works equally
+for archive ids and group ids -- both are just directories in that
+same layout, an archive's just additionally a git repo with a
+`source' subdirectory.  Signals `user-error' if ID isn't found under
+any configured MathHub directory."
+  (let ((segments (split-string id "/" t)))
     (or (seq-some
          (lambda (mh)
            (let ((root (apply #'file-name-concat mh segments)))
-             (when (file-directory-p root)
-               (apply #'file-name-concat root "source"
-                      (split-string rel-path "/" t)))))
+             (when (file-directory-p root) root)))
          (stex--mathhub-settings))
         (user-error
          "𝖥𝖫∀𝖬∫: could not find %s locally under any configured MathHub directory"
-         archive-id))))
+         id))))
+
+(defun stex--mathhub-local-path (archive-id rel-path)
+  "Resolve ARCHIVE-ID/REL-PATH to a local file, or signal `user-error'."
+  (apply #'file-name-concat (stex--mathhub-resolve-dir archive-id)
+         "source" (split-string rel-path "/" t)))
 
 ;;;###autoload
 (defun stex-mathhub-open-file ()
@@ -896,6 +949,17 @@ MathHub commands: launches a standalone connection via
   'follow-link t
   'face 'font-lock-function-name-face)
 
+(defun stex--mathhub-tree-file-button-action (button)
+  "Open the file associated with BUTTON, a MathHub tree file tag.
+A named top-level function, not a closure -- see
+`stex--git-pull-sentinel' for why that matters in this file; reads
+the node off BUTTON via `button-get' (which works for a text button
+like this one given its buffer position, same as for an overlay
+button) instead of closing over it."
+  (let ((node (button-get button 'stex--mathhub-node)))
+    (find-file (stex--mathhub-local-path (plist-get node :archive)
+                                          (plist-get node :path)))))
+
 (defun stex--mathhub-tree-tag (node)
   "Build the tag string for NODE in the MathHub tree.
 File nodes are buttons that open the file; group/archive/dir nodes
@@ -912,10 +976,7 @@ regardless of node kind."
            :type 'stex--mathhub-tree-item
            'stex--mathhub-node node
            'help-echo "mouse-1, RET: open file"
-           'action (lambda (_btn)
-                     (find-file (stex--mathhub-local-path
-                                 (plist-get node :archive)
-                                 (plist-get node :path)))))
+           'action #'stex--mathhub-tree-file-button-action)
           (buffer-string))
       (propertize label 'stex--mathhub-node node))))
 
@@ -944,6 +1005,19 @@ forgiving the way `dired' is about where on a line you press a key."
                       (plist-get (car stex--mathhub-tree-roots) :kind))
             "whole tree")))
 
+(defun stex--mathhub-tree-expand (node _widget)
+  "Return the list of child tree-widgets for NODE.
+A named top-level function, not a closure -- see
+`stex--git-pull-sentinel' for why that matters in this file; NODE is
+bound into each widget's `:expander' via `apply-partially' (see
+`stex--mathhub-tree-widget'), which is safe regardless of this file's
+`lexical-binding' state since `apply-partially' itself is defined in
+Emacs's own (always lexically-bound) subr.el, rather than by a lambda
+literal here closing over NODE directly."
+  (let ((children (stex--mathhub-node-children node)))
+    (append (mapcar #'stex--mathhub-tree-widget (car children))
+            (mapcar #'stex--mathhub-tree-widget (cdr children)))))
+
 (defun stex--mathhub-tree-widget (node)
   "Build a (not yet inserted) `tree-widget' spec for NODE.
 Children are fetched lazily: NODE's `:expander' only calls
@@ -953,11 +1027,7 @@ recursively."
   (let ((w (widget-convert
             'tree-widget
             :tag (stex--mathhub-tree-tag node)
-            :expander
-            (lambda (_widget)
-              (let ((children (stex--mathhub-node-children node)))
-                (append (mapcar #'stex--mathhub-tree-widget (car children))
-                        (mapcar #'stex--mathhub-tree-widget (cdr children))))))))
+            :expander (apply-partially #'stex--mathhub-tree-expand node))))
     (widget-put w :empty-icon (widget-get w :leaf-icon))
     w))
 
@@ -1020,6 +1090,28 @@ Inserts into the most-recently-used other window's buffer -- see
                              (plist-get node :archive)
                              (string-remove-suffix ".tex" (plist-get node :path)))))
 
+(defun stex-mathhub-tree-update-at-point ()
+  "Git-pull the archive or group on the current line.
+A directory/file line updates its containing archive.  Unlike
+`stex-mathhub-update-archive'/`stex-mathhub-update-group', doesn't
+re-prompt for what to update -- you're already looking at it."
+  (interactive)
+  (let ((node (stex--mathhub-tree-node-at-point)))
+    (unless node
+      (user-error
+       "𝖥𝖫∀𝖬∫: point at a group, archive, directory, or file to update its archive"))
+    (pcase (plist-get node :kind)
+      ((or 'archive 'group)
+       (let ((id (plist-get node :id)))
+         (stex--mathhub-update-roots
+          (list (stex--mathhub-resolve-dir id))
+          (format "%s %s" (plist-get node :kind) id))))
+      ((or 'dir 'file)
+       (let ((archive (plist-get node :archive)))
+         (stex--mathhub-update-roots
+          (list (stex--mathhub-resolve-dir archive))
+          (format "archive %s" archive)))))))
+
 (define-derived-mode stex-mathhub-tree-mode special-mode "sTeX-MathHub"
   "Major mode for browsing local MathHub archives as a tree.
 \\{stex-mathhub-tree-mode-map}"
@@ -1031,6 +1123,7 @@ Inserts into the most-recently-used other window's buffer -- see
 (define-key stex-mathhub-tree-mode-map "u" #'stex-mathhub-tree-insert-usemodule)
 (define-key stex-mathhub-tree-mode-map "a" #'stex-mathhub-new-archive)
 (define-key stex-mathhub-tree-mode-map "U" #'stex-mathhub-update)
+(define-key stex-mathhub-tree-mode-map "p" #'stex-mathhub-tree-update-at-point)
 
 ;;;###autoload
 (defun stex-mathhub-tree ()
@@ -1046,6 +1139,8 @@ whole MathHub at once, reconfigurable in place:
   a  `stex-mathhub-new-archive' -- create a new archive; the tree
      refreshes itself once flams confirms it (flams/updateMathHub)
   U  `stex-mathhub-update' -- git-pull every local archive
+  p  `stex-mathhub-tree-update-at-point' -- git-pull just the
+     archive/group on the current line
   g  `revert-buffer' -- full reset to the whole MathHub
 Also works with no `.tex' file open at all, launching a standalone
 `flams' connection via `stex-mathhub-root' if nothing is already
@@ -1225,33 +1320,73 @@ QUEUE is empty and `stex--git-pull-finish' runs."
         (process-put proc 'stex--pull-buffer buffer)))))
 
 (defconst stex--mathhub-update-buffer-name "*sTeX MathHub Update*"
-  "Name of the progress buffer for `stex-mathhub-update'.")
+  "Name of the progress buffer for `stex-mathhub-update' and friends.")
 
-;;;###autoload
-(defun stex-mathhub-update ()
-  "Git-pull every local MathHub archive, skipping ones needing credentials.
-Finds every git repository under each directory
-`stex--mathhub-settings' reports (launching a standalone connection
-via `stex-mathhub-root' first if nothing is connected, like other
-MathHub commands) and runs `git pull --ff-only' in each -- one at a
-time, asynchronously, so Emacs stays responsive.  An archive whose
-pull would need a password or passphrase is detected (git/ssh are
-made to fail immediately instead of prompting) and skipped rather
-than hanging or failing the whole run.  Progress and a final summary
-go to the buffer named by `stex--mathhub-update-buffer-name'."
-  (interactive)
-  (let* ((roots (stex--mathhub-settings))
-         (dirs (stex--git-repo-dirs roots))
+(defun stex--mathhub-update-roots (roots what)
+  "Git-pull every repository found under ROOTS (a list of directories).
+WHAT is a short description of the scope, used in the progress
+buffer's header (e.g. \"the whole MathHub\", \"archive foo/bar\").
+Shared by `stex-mathhub-update', `stex-mathhub-update-archive', and
+`stex-mathhub-update-group' -- see `stex-mathhub-update' for the
+skip-on-credential-failure/async/progress-buffer behavior, identical
+regardless of scope."
+  (let* ((dirs (stex--git-repo-dirs roots))
          (buffer (get-buffer-create stex--mathhub-update-buffer-name)))
     (unless dirs
       (user-error "𝖥𝖫∀𝖬∫: no git repositories found under %s"
                   (mapconcat #'identity roots ", ")))
     (with-current-buffer buffer
       (erase-buffer)
-      (insert (format "=== sTeX MathHub update started %s ===\n\n"
-                       (current-time-string))))
+      (insert (format "=== sTeX MathHub update (%s) started %s ===\n\n"
+                       what (current-time-string))))
     (display-buffer buffer)
     (stex--git-pull-1 dirs nil buffer)))
+
+;;;###autoload
+(defun stex-mathhub-update-archive ()
+  "Git-pull a single MathHub archive that you choose."
+  (interactive)
+  (let ((archive (stex--choose-archive)))
+    (stex--mathhub-update-roots (list (stex--mathhub-resolve-dir archive))
+                                 (format "archive %s" archive))))
+
+;;;###autoload
+(defun stex-mathhub-update-group ()
+  "Git-pull every archive in a MathHub group that you choose.
+See `stex--choose-group' for how the group is picked."
+  (interactive)
+  (let ((group (stex--choose-group)))
+    (stex--mathhub-update-roots (list (stex--mathhub-resolve-dir group))
+                                 (format "group %s" group))))
+
+;;;###autoload
+(defun stex-mathhub-update (&optional scope)
+  "Git-pull local MathHub archives, skipping ones needing credentials.
+With no prefix argument (SCOPE nil), pulls every archive under every
+directory `stex--mathhub-settings' reports.  With one `\\[universal-argument]', \
+prompts for a
+single archive instead (delegates to `stex-mathhub-update-archive').
+With `\\[universal-argument] \\[universal-argument]' \
+\(or any prefix numeric value >= 16), prompts for a
+group instead, pulling every archive in it
+\(`stex-mathhub-update-group') -- mirrors how
+`stex-show-call-hierarchy' uses a prefix argument to pick a
+direction.
+
+Whichever scope, this launches a standalone connection via
+`stex-mathhub-root' first if nothing is connected (like other MathHub
+commands), runs `git pull --ff-only' in each repository -- one at a
+time, asynchronously, so Emacs stays responsive -- and detects
+archives whose pull would need a password or passphrase (by making
+git/ssh fail immediately instead of prompting) to skip them rather
+than hanging or failing the whole run.  Progress and a final summary
+go to the buffer named by `stex--mathhub-update-buffer-name'."
+  (interactive "P")
+  (cond
+   ((null scope)
+    (stex--mathhub-update-roots (stex--mathhub-settings) "the whole MathHub"))
+   ((>= (prefix-numeric-value scope) 16) (stex-mathhub-update-group))
+   (t (stex-mathhub-update-archive))))
 
 (provide 'stex-mode)
 

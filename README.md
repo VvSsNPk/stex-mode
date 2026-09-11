@@ -45,7 +45,7 @@ Enabling it in a buffer:
 | `C-c C-x u` | `stex-mathhub-insert-usemodule`   | Drill down local MathHub archives, insert `\usemodule` |
 | `C-c C-x t` | `stex-mathhub-tree`               | Whole local MathHub as a persistent tree (side window) |
 | `C-c C-x a` | `stex-mathhub-new-archive`        | Create a new MathHub archive |
-| `C-c C-x U` | `stex-mathhub-update`             | `git pull` every local archive (skips ones needing a password) |
+| `C-c C-x U` | `stex-mathhub-update`             | `git pull` local archives (see scopes below) |
 | `C-c C-x h` | `stex-show-call-hierarchy`        | Call hierarchy for the symbol at point (side window) |
 | `C-c C-x i` | `imenu`                           | Jump to a symbol in the current file |
 
@@ -76,7 +76,8 @@ commands:
 | `o` | `stex-mathhub-tree-open` | Open the file on the current line |
 | `u` | `stex-mathhub-tree-insert-usemodule` | `\usemodule` for it, into whatever window you were last in |
 | `a` | `stex-mathhub-new-archive` | Create a new archive (see below) |
-| `U` | `stex-mathhub-update` | `git pull` every local archive (see below) |
+| `U` | `stex-mathhub-update` | `git pull` local archives (see below) |
+| `p` | `stex-mathhub-tree-update-at-point` | `git pull` just the archive/group on the current line |
 | `g` | `revert-buffer` | Full reset to the whole MathHub |
 
 `stex-mathhub-new-archive` creates a new MathHub archive -- prompts for an
@@ -86,15 +87,22 @@ archive id (e.g. `My/Archive/Name`) and a URL base, then sends
 automatically once `flams` confirms the change (`flams/updateMathHub`).
 
 `stex-mathhub-update` runs `git pull --ff-only` in every git repository
-found under the directories `flams` reports as your MathHub, one at a
-time, asynchronously (Emacs stays responsive), with progress and a final
-summary in `*sTeX MathHub Update*`. There's no `flams`/vscode equivalent
-to port here -- checked the vscode extension's full list of custom LSP
-methods and REST endpoints, none of them do this (`flams/install` is for
-archives you don't have *yet*, not updating ones you do). Archives that
-would need a password or SSH passphrase to pull are detected (git/ssh are
-forced to fail immediately instead of prompting, so nothing ever hangs)
-and reported as skipped rather than failing the whole run.
+under some scope, one at a time, asynchronously (Emacs stays responsive),
+with progress and a final summary in `*sTeX MathHub Update*`. Scope
+depends on a prefix argument: none = the whole MathHub, one `C-u` = a
+single archive you pick (`stex-mathhub-update-archive`, also directly
+`M-x`-able), two `C-u C-u` = a whole group you pick
+(`stex-mathhub-update-group`, likewise `M-x`-able) -- mirrors how
+`stex-show-call-hierarchy` already uses a prefix argument to pick a
+direction. Inside the tree, `stex-mathhub-tree-update-at-point` pulls
+whatever archive/group is on the current line without re-prompting for
+it. There's no `flams`/vscode equivalent to any of this -- checked the
+vscode extension's full list of custom LSP methods and REST endpoints,
+none of them do it (`flams/install` is for archives you don't have *yet*,
+not updating ones you do). Archives that would need a password or SSH
+passphrase to pull are detected (git/ssh are forced to fail immediately
+instead of prompting, so nothing ever hangs) and reported as skipped
+rather than failing the whole run.
 
 None of the MathHub commands need a `.tex` file open at all -- if nothing
 is already connected anywhere (in any buffer, this one or not), they
