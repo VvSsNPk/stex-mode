@@ -45,6 +45,7 @@ Enabling it in a buffer:
 | `C-c C-x u` | `stex-mathhub-insert-usemodule`   | Drill down local MathHub archives, insert `\usemodule` |
 | `C-c C-x t` | `stex-mathhub-tree`               | Whole local MathHub as a persistent tree (side window) |
 | `C-c C-x a` | `stex-mathhub-new-archive`        | Create a new MathHub archive |
+| `C-c C-x U` | `stex-mathhub-update`             | `git pull` every local archive (skips ones needing a password) |
 | `C-c C-x h` | `stex-show-call-hierarchy`        | Call hierarchy for the symbol at point (side window) |
 | `C-c C-x i` | `imenu`                           | Jump to a symbol in the current file |
 
@@ -75,6 +76,7 @@ commands:
 | `o` | `stex-mathhub-tree-open` | Open the file on the current line |
 | `u` | `stex-mathhub-tree-insert-usemodule` | `\usemodule` for it, into whatever window you were last in |
 | `a` | `stex-mathhub-new-archive` | Create a new archive (see below) |
+| `U` | `stex-mathhub-update` | `git pull` every local archive (see below) |
 | `g` | `revert-buffer` | Full reset to the whole MathHub |
 
 `stex-mathhub-new-archive` creates a new MathHub archive -- prompts for an
@@ -82,6 +84,17 @@ archive id (e.g. `My/Archive/Name`) and a URL base, then sends
 `flams/newArchive` (a direct port of the "New Math Archive" flow in
 `vscode/src/ts/commands.ts`). The tree, if open, refreshes itself
 automatically once `flams` confirms the change (`flams/updateMathHub`).
+
+`stex-mathhub-update` runs `git pull --ff-only` in every git repository
+found under the directories `flams` reports as your MathHub, one at a
+time, asynchronously (Emacs stays responsive), with progress and a final
+summary in `*sTeX MathHub Update*`. There's no `flams`/vscode equivalent
+to port here -- checked the vscode extension's full list of custom LSP
+methods and REST endpoints, none of them do this (`flams/install` is for
+archives you don't have *yet*, not updating ones you do). Archives that
+would need a password or SSH passphrase to pull are detected (git/ssh are
+forced to fail immediately instead of prompting, so nothing ever hangs)
+and reported as skipped rather than failing the whole run.
 
 None of the MathHub commands need a `.tex` file open at all -- if nothing
 is already connected anywhere (in any buffer, this one or not), they

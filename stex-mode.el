@@ -62,8 +62,14 @@
 ;; archive (a direct port of the "New Math Archive" flow in
 ;; vscode/src/ts/commands.ts); the tree, if open, refreshes itself
 ;; once flams confirms it via the flams/updateMathHub notification.
-;; Only local archives are browsed/created in any of these -- there is
-;; no remote-archive browsing or install-from-remote support.
+;; `stex-mathhub-update' git-pulls every local archive found under
+;; `stex--mathhub-settings' (asynchronously, one at a time), skipping
+;; -- rather than hanging or aborting the whole run on -- any archive
+;; whose pull would need a password.  There is no flams/vscode
+;; equivalent to this; it's a from-scratch port of a plain git-pull
+;; script.  Only local archives are browsed/created/updated in any of
+;; these -- there is no remote-archive browsing or install-from-remote
+;; support.
 ;;
 ;; Call hierarchy and document symbols are eglot's own generic LSP
 ;; features, not FLAMS-specific -- `stex-show-call-hierarchy' (a thin
@@ -396,6 +402,7 @@ otherwise put them."
     (define-key prefix "u" #'stex-mathhub-insert-usemodule)
     (define-key prefix "t" #'stex-mathhub-tree)
     (define-key prefix "a" #'stex-mathhub-new-archive)
+    (define-key prefix "U" #'stex-mathhub-update)
     (define-key prefix "h" #'stex-show-call-hierarchy)
     (define-key prefix "i" #'imenu)
     (define-key map (kbd "C-c C-x") prefix)
@@ -416,6 +423,7 @@ using it).
 \\[stex-mathhub-insert-usemodule]  `stex-mathhub-insert-usemodule'
 \\[stex-mathhub-tree]  `stex-mathhub-tree'
 \\[stex-mathhub-new-archive]  `stex-mathhub-new-archive'
+\\[stex-mathhub-update]  `stex-mathhub-update' -- git-pull every local archive
 \\[stex-show-call-hierarchy]  `stex-show-call-hierarchy' (wraps eglot's
   own `eglot-show-call-hierarchy'; requires flams to advertise
   :callHierarchyProvider)
@@ -1022,6 +1030,7 @@ Inserts into the most-recently-used other window's buffer -- see
 (define-key stex-mathhub-tree-mode-map "o" #'stex-mathhub-tree-open)
 (define-key stex-mathhub-tree-mode-map "u" #'stex-mathhub-tree-insert-usemodule)
 (define-key stex-mathhub-tree-mode-map "a" #'stex-mathhub-new-archive)
+(define-key stex-mathhub-tree-mode-map "U" #'stex-mathhub-update)
 
 ;;;###autoload
 (defun stex-mathhub-tree ()
@@ -1036,6 +1045,7 @@ whole MathHub at once, reconfigurable in place:
      whatever window you were last in
   a  `stex-mathhub-new-archive' -- create a new archive; the tree
      refreshes itself once flams confirms it (flams/updateMathHub)
+  U  `stex-mathhub-update' -- git-pull every local archive
   g  `revert-buffer' -- full reset to the whole MathHub
 Also works with no `.tex' file open at all, launching a standalone
 `flams' connection via `stex-mathhub-root' if nothing is already
@@ -1062,6 +1072,186 @@ configured by `stex-mathhub-tree-side'/`stex-mathhub-tree-width'."
                      display-buffer-alist)))
           (pop-to-buffer buf))
       (pop-to-buffer buf))))
+
+;;; MathHub git update
+
+;; `stex-mathhub-update' git-pulls every local archive.  There is no
+;; flams/vscode equivalent to port -- confirmed by grepping the
+;; vscode extension for every flams/* LSP method and api/* HTTP
+;; endpoint it uses; none of them do this (`flams/install' is for
+;; pulling a *remote* archive you don't have yet, `flams/reload' just
+;; re-scans what's already on disk).  This is a from-scratch Elisp
+;; port of a plain "recursively `git pull --ff-only' every repo under
+;; a directory" script, extended with the one thing that script
+;; doesn't do: detect archives that would need a password/passphrase
+;; to pull and skip them instead of hanging or failing the whole run.
+
+(defconst stex--git-auth-failure-patterns
+  '("terminal prompts disabled"
+    "could not read Username"
+    "could not read Password"
+    "Permission denied (publickey"
+    "Authentication failed"
+    "Could not read from remote repository"
+    "Host key verification failed")
+  "Substrings in `git pull' output indicating a credential failure.
+Reachable only because `stex--git-pull-process-environment' makes
+git/ssh fail fast on a would-be prompt instead of hanging, so any of
+these mean \"this archive needs a password we don't have\", not \"the
+network is down\" or similar.")
+
+(defun stex--git-pull-process-environment ()
+  "Return `process-environment' forcing git/ssh to fail instead of prompting.
+Without this, a `git pull' against an archive requiring a password
+would hang Emacs waiting for terminal input that never comes."
+  (append (list "GIT_TERMINAL_PROMPT=0"
+                "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10"
+                "GIT_ASKPASS=true")
+          process-environment))
+
+(defun stex--git-auth-failure-p (output)
+  "Return non-nil if OUTPUT matches a known git credential-failure pattern."
+  (let ((case-fold-search t))
+    (cl-some (lambda (pat) (string-match-p (regexp-quote pat) output))
+             stex--git-auth-failure-patterns)))
+
+(defun stex--classify-git-pull-result (exit-code output)
+  "Classify a finished `git pull' given its EXIT-CODE and OUTPUT.
+Returns `ok', `skipped' (needs credentials), or `failed'."
+  (cond
+   ((zerop exit-code) 'ok)
+   ((stex--git-auth-failure-p output) 'skipped)
+   (t 'failed)))
+
+(defun stex--git-repo-dirs (roots)
+  "Return the directory of every git repository found under ROOTS.
+Does not recurse into a matched `.git' directory's own internals."
+  (delete-dups
+   (mapcan
+    (lambda (root)
+      (mapcar #'file-name-directory
+              (directory-files-recursively
+               root "\\.git$" t
+               (lambda (dir) (not (string-suffix-p ".git" dir))))))
+    roots)))
+
+(defun stex--indent-lines (string)
+  "Indent every line of STRING by four spaces."
+  (mapconcat (lambda (line) (concat "    " line))
+             (split-string (string-trim string) "\n")
+             "\n"))
+
+(defun stex--git-pull-status-line (status output)
+  "Format a one-line (or, for failures, multi-line) report of STATUS.
+OUTPUT is the pull's captured stdout+stderr, shown indented for
+`failed' (not for `ok'/`skipped', which don't need it)."
+  (pcase status
+    ('ok "ok")
+    ('skipped "skipped (needs credentials)")
+    ('failed (concat "FAILED\n" (stex--indent-lines output)))))
+
+(defun stex--git-pull-finish (results buffer)
+  "Write a final summary of RESULTS (an alist of DIR . STATUS) to BUFFER."
+  (let ((ok (cl-count 'ok results :key #'cdr))
+        (skipped (cl-count 'skipped results :key #'cdr))
+        (failed (cl-count 'failed results :key #'cdr)))
+    (with-current-buffer buffer
+      (goto-char (point-max))
+      (insert (format "\n=== Done: %d updated, %d skipped, %d failed (%s) ===\n"
+                       ok skipped failed (current-time-string))))
+    (message "𝖥𝖫∀𝖬∫: MathHub update finished: %d updated, %d skipped, %d failed"
+             ok skipped failed)
+    (when (cl-plusp ok)
+      ;; Tell flams to re-scan the MathHub content we just changed on
+      ;; disk -- it has no other way to know git touched anything.
+      (ignore-errors
+        (jsonrpc-notify (stex--ensure-mathhub-server) "flams/reload" (list))))))
+
+(defun stex--git-pull-filter (proc chunk)
+  "Accumulate PROC's output CHUNK for later classification.
+A named top-level function, not a closure -- see `stex--git-pull-1'
+for why that matters here."
+  (process-put proc 'stex--output
+               (concat (or (process-get proc 'stex--output) "") chunk)))
+
+(defun stex--git-pull-sentinel (proc _event)
+  "Handle PROC's completion by continuing the queue stashed on it.
+Reads back DIR/REST/RESULTS/BUFFER via `process-get' rather than
+closing over them, and a named top-level function rather than a
+lambda, so this works correctly regardless of whether this file
+happens to have `lexical-binding' enabled -- `make-process' sentinels
+are called long after the call that created them returns, so a
+lambda here would be relying on variables captured from a `let' whose
+dynamic extent (under dynamic binding) has already ended by the time
+it runs; empirically confirmed to fail with a `void-variable' error
+before this function existed."
+  (unless (process-live-p proc)
+    (let* ((output (or (process-get proc 'stex--output) ""))
+           (status (stex--classify-git-pull-result
+                    (process-exit-status proc) output))
+           (dir (process-get proc 'stex--dir))
+           (rest (process-get proc 'stex--rest))
+           (results (process-get proc 'stex--results))
+           (buffer (process-get proc 'stex--pull-buffer)))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (insert (stex--git-pull-status-line status output) "\n"))
+      (stex--git-pull-1 rest (cons (cons dir status) results) buffer))))
+
+(defun stex--git-pull-1 (queue results buffer)
+  "Asynchronously `git pull --ff-only' the first directory in QUEUE.
+On completion, continues with the rest of QUEUE, accumulating each
+result onto RESULTS, and appends a status line to BUFFER -- until
+QUEUE is empty and `stex--git-pull-finish' runs."
+  (if (null queue)
+      (stex--git-pull-finish results buffer)
+    (let ((dir (car queue))
+          (rest (cdr queue)))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (insert (format "Pulling %s ... " dir)))
+      (let* ((default-directory dir)
+             (process-environment (stex--git-pull-process-environment))
+             (proc (make-process
+                    :name "stex-mathhub-pull"
+                    :buffer nil
+                    :noquery t
+                    :command '("git" "pull" "--ff-only")
+                    :filter #'stex--git-pull-filter
+                    :sentinel #'stex--git-pull-sentinel)))
+        (process-put proc 'stex--dir dir)
+        (process-put proc 'stex--rest rest)
+        (process-put proc 'stex--results results)
+        (process-put proc 'stex--pull-buffer buffer)))))
+
+(defconst stex--mathhub-update-buffer-name "*sTeX MathHub Update*"
+  "Name of the progress buffer for `stex-mathhub-update'.")
+
+;;;###autoload
+(defun stex-mathhub-update ()
+  "Git-pull every local MathHub archive, skipping ones needing credentials.
+Finds every git repository under each directory
+`stex--mathhub-settings' reports (launching a standalone connection
+via `stex-mathhub-root' first if nothing is connected, like other
+MathHub commands) and runs `git pull --ff-only' in each -- one at a
+time, asynchronously, so Emacs stays responsive.  An archive whose
+pull would need a password or passphrase is detected (git/ssh are
+made to fail immediately instead of prompting) and skipped rather
+than hanging or failing the whole run.  Progress and a final summary
+go to the buffer named by `stex--mathhub-update-buffer-name'."
+  (interactive)
+  (let* ((roots (stex--mathhub-settings))
+         (dirs (stex--git-repo-dirs roots))
+         (buffer (get-buffer-create stex--mathhub-update-buffer-name)))
+    (unless dirs
+      (user-error "𝖥𝖫∀𝖬∫: no git repositories found under %s"
+                  (mapconcat #'identity roots ", ")))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert (format "=== sTeX MathHub update started %s ===\n\n"
+                       (current-time-string))))
+    (display-buffer buffer)
+    (stex--git-pull-1 dirs nil buffer)))
 
 (provide 'stex-mode)
 
