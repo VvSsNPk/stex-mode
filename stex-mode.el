@@ -112,7 +112,10 @@
 ;; declaration and notation macros -- `\symdecl', `\textsymdecl',
 ;; `\symdef', `\notation', `\symref'/`\sr', `\symname'/`\sn', `\symuse',
 ;; `\definiendum' and `\definame' -- with the same kind of `key=val'
-;; prompting.  See `stex--register-macros'.
+;; prompting.  It also stops `M-q'/auto-fill from reflowing `\notation'/
+;; `\symdef''s notation argument or `\textsymdecl''s output argument,
+;; since those hold presentation code, not prose.  See
+;; `stex--register-macros'.
 ;;
 ;; Not implemented (yet): the quiz preview pane, the fuzzy
 ;; module-search UI, remote MathHub browsing and archive installation,
@@ -593,13 +596,75 @@ display text explicitly.")
   "Optional keyword arguments of `\\definame'.
 Inherits `\\symname's `pre'/`post' plus its own `gf'/`root'.")
 
+;; Forward declarations for AUCTeX symbols used outside any `fboundp'
+;; guard (unlike `LaTeX-add-environments'/`TeX-add-symbols' &c. above,
+;; which the byte-compiler already knows not to flag when the call is
+;; textually inside its own guard) -- `stex--notation-arg-open-p' is
+;; only ever reachable once AUCTeX has actually defined both, via
+;; `stex--register-macros' below, but is compiled as an ordinary
+;; standalone function.
+(declare-function TeX-escaped-p "tex" (&optional pos))
+(defvar TeX-esc)
+
+(defconst stex--notation-arg-macros
+  '("notation" "notation*" "symdef" "textsymdecl")
+  "Macros whose final `{...}' argument is code, not prose.
+`\\notation'/`\\notation*''s notation, `\\symdef's notation,
+`\\textsymdecl's output.  Protected from paragraph-fill reflow by
+`stex--in-notation-arg-p'; deliberately not `\\symdecl' (no such
+argument) or `\\definiendum'/`\\definame' (their text *is* prose).")
+
+(defun stex--notation-arg-open-p (open-pos)
+  "Non-nil if OPEN-POS opens a `stex--notation-arg-macros' final argument.
+OPEN-POS must be the buffer position of an opening brace (as found in
+the third element of `syntax-ppss').  Checks what precedes it: an
+optional `[...]' keyval group (skipped over), then a mandatory
+`{...}' argument, then one of `stex--notation-arg-macros' -- i.e. the
+exact `{arg1}[options]{arg2}' shape those macros were registered
+with in `stex--register-macros', with OPEN-POS as arg2's brace."
+  (and (eq (char-after open-pos) ?\{)
+       (save-excursion
+         (goto-char open-pos)
+         (skip-chars-backward " \t\n")
+         (when (eq (char-before) ?\])
+           (ignore-errors (backward-sexp))
+           (skip-chars-backward " \t\n"))
+         (and (eq (char-before) ?\})
+              (ignore-errors (backward-sexp) t)
+              (progn
+                (skip-chars-backward " \t\n")
+                (let ((name-end (point)))
+                  (skip-chars-backward "A-Za-z@*")
+                  (and (eq (char-before) (aref TeX-esc 0))
+                       (not (TeX-escaped-p (1- (point))))
+                       (member (buffer-substring-no-properties (point) name-end)
+                               stex--notation-arg-macros))))))))
+
+(defun stex--in-notation-arg-p ()
+  "Non-nil if point is inside a protected sTeX notation/output argument.
+Checks every brace level currently open around point (not just the
+innermost), so it still protects e.g. \\comp{...} text nested inside
+a \\notation's own argument.  Meant for `fill-nobreak-predicate' --
+added there by `stex--register-macros'.  Unlike marking these macros
+via `LaTeX-verbatim-macros-with-braces' (which would also disable
+font-lock and macro recognition inside the argument, appropriate for
+truly verbatim text like `\\lstinline' but not for this, which is
+ordinary LaTeX with real macros in it), this only ever suppresses
+line-fill breaks."
+  (cl-some #'stex--notation-arg-open-p (nth 9 (syntax-ppss))))
+
 (defun stex--register-macros ()
   "Teach AUCTeX's `TeX-insert-macro' command about sTeX's macros.
 A no-op unless AUCTeX is loaded.  Adds to the *current buffer's* macro
 list only -- see `stex--register-environments' for the same idea
 applied to environments, including the caveat about there being no way
-to undo this when `stex-mode' is disabled again."
+to undo this when `stex-mode' is disabled again.  Also adds
+`stex--in-notation-arg-p' to `fill-nobreak-predicate', same as
+AUCTeX's own `LaTeX-common-initialization' does for `\\verb'-like
+macros, so `M-q'/auto-fill never rewraps a notation/output argument."
   (when (fboundp 'TeX-add-symbols)
+    (add-to-list (make-local-variable 'fill-nobreak-predicate)
+                 #'stex--in-notation-arg-p t)
     (TeX-add-symbols
      '("symdecl" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])
      '("symdecl*" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])

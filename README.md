@@ -176,6 +176,20 @@ turns out to take the same `pre=`/`post=` options as `\symname`, for
 instance). As with environments, this only extends AUCTeX's existing
 completion list for the current buffer -- no new command, no rebinding.
 
+`stex-mode` also protects `\notation`/`\notation*`'s and `\symdef`'s
+final argument (the actual notation code) and `\textsymdecl`'s output
+argument from `M-q`/auto-fill reflow -- these hold presentation code,
+not prose, so line-wrapping them mid-argument would be actively
+unwelcome even though it's harmless to LaTeX itself. This works the
+same way AUCTeX already protects `\verb|...|` (via `fill-nobreak-predicate`,
+a standard Emacs Lisp fill hook), but without treating the argument as
+verbatim text the way `LaTeX-verbatim-macros-with-braces` would -- it's
+ordinary LaTeX in there (nested macros like `\comp{...}` are still
+recognized as such, still font-locked normally), only line-breaking is
+suppressed. Text outside these arguments (including `\symdecl`, which
+has no such argument at all, and `\definiendum`/`\definame`, whose text
+argument *is* prose) fills exactly as before.
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:

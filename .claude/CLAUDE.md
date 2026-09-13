@@ -86,6 +86,23 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   rather than trusted from its simplified tutorial prose, which undersells
   what a couple of them accept (`\symref` also takes `\symname`'s `pre=`/
   `post=`, for instance — not mentioned in the prose description).
+- Fill protection (`stex--in-notation-arg-p`, `stex--notation-arg-open-p`,
+  added to buffer-local `fill-nobreak-predicate` from `stex--register-macros`)
+  stops `M-q`/auto-fill from reflowing `\notation`'s/`\notation*`'s/`\symdef`'s
+  final (notation) argument or `\textsymdecl`'s output argument — these hold
+  presentation code, not prose, confirmed empirically to otherwise get
+  reflowed mid-argument by AUCTeX's stock filling. Deliberately *not*
+  implemented via `LaTeX-verbatim-macros-with-braces` (AUCTeX's existing
+  `\verb`-style mechanism): that also disables font-lock/macro-recognition
+  inside the argument via a generic-string syntax-table hack, which is
+  wrong here since these arguments are ordinary LaTeX containing real
+  macros (e.g. `\comp{...}`), not literal verbatim text — and it also
+  protects whichever argument comes *first* after the macro name, not the
+  *last*, which is what these particular macros need. Instead,
+  `stex--notation-arg-open-p` walks backward from each open brace level in
+  `(nth 9 (syntax-ppss))` (so a nested macro like `\comp{...}` inside the
+  argument is still caught) checking for the known `{arg1}[options]{arg2}`
+  shape these macros were registered with.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP
