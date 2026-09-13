@@ -44,7 +44,13 @@
 ;;
 ;; `M-x stex-mode' will explain what is missing if the check fails.
 ;; Once connected, use `stex-build-file', `stex-build-all',
-;; `stex-export-tex' and `stex-export-html'.
+;; `stex-export-tex' and `stex-export-html'.  The VS Code extension
+;; shows build progress in a webview panel that's really just an
+;; iframe onto a page `flams' serves over plain HTTP; `stex-build-file'
+;; and `stex-build-all' open that same page in your browser after
+;; queuing a build (see `stex-build-auto-dashboard' to turn that off),
+;; and `stex-build-dashboard' opens it on demand -- no in-Emacs webview
+;; rendering, same tradeoff as `stex-preview-browser' below.
 ;;
 ;; `stex-mathhub-open-file' and `stex-mathhub-insert-usemodule' browse
 ;; your locally configured MathHub archives (queried live from the
@@ -211,6 +217,18 @@ default), `stex-mode' just messages that a preview is ready; run
 `stex-preview-browser' yourself to view it.  When non-nil, every such
 notification opens a browser tab, which can be surprising if it
 fires more often than you'd expect a browser popup."
+  :type 'boolean
+  :group 'stex)
+
+(defcustom stex-build-auto-dashboard t
+  "Whether `stex-build-file'/`stex-build-all' open the build dashboard.
+FLAMS serves a live build-queue page over HTTP -- the same one the VS
+Code extension embeds in a webview panel right after a build request.
+When non-nil (the default, matching the VS Code extension's own
+always-on behavior there), a successful build request opens that page
+in your browser, same as calling `stex-build-dashboard' yourself.  Set
+to nil to only build, without a browser tab popping up; you can still
+open the dashboard on demand."
   :type 'boolean
   :group 'stex)
 
@@ -413,6 +431,7 @@ otherwise put them."
     (define-key prefix "c" #'stex-connect)
     (define-key prefix "f" #'stex-build-file)
     (define-key prefix "F" #'stex-build-all)
+    (define-key prefix "d" #'stex-build-dashboard)
     (define-key prefix "e" #'stex-export-tex)
     (define-key prefix "E" #'stex-export-html)
     (define-key prefix "p" #'stex-preview-browser)
@@ -434,6 +453,8 @@ using it).
 \\<stex-mode-map>\\[stex-connect]  `stex-connect'
 \\[stex-build-file]  `stex-build-file'
 \\[stex-build-all]  `stex-build-all'
+\\[stex-build-dashboard]  `stex-build-dashboard' (opens in a browser; see
+  `stex-build-auto-dashboard' to open it automatically after a build)
 \\[stex-export-tex]  `stex-export-tex'
 \\[stex-export-html]  `stex-export-html'
 \\[stex-preview-browser]  `stex-preview-browser'
@@ -763,14 +784,39 @@ anywhere yet."
     (user-error "𝖥𝖫∀𝖬∫: buffer is not visiting a file"))
   (eglot-path-to-uri buffer-file-name))
 
+(defun stex--dashboard-url (base &optional page)
+  "Return the URL of FLAMS's build dashboard at BASE.
+PAGE selects a sub-page, e.g. \"queue\" for the live build queue;
+omit (or nil) for the general dashboard landing page.  FLAMS serves
+this directly over HTTP -- it's the same page the VS Code extension
+embeds in a webview panel, just an ordinary URL here."
+  (concat (string-remove-suffix "/" base) "/dashboard/" (or page "")))
+
+(defun stex--handle-build-request-result (base _result)
+  "Given BASE, the server's HTTP base URL (or nil), handle a build success.
+A named top-level function, not a closure -- see
+`stex--mathhub-tree-expand' for why, and how BASE gets bound in via
+`apply-partially' instead.  Opens the build-queue dashboard per
+`stex-build-auto-dashboard' when BASE is known; a pure-LSP build
+request (the usual case right after connecting, before FLAMS has
+reported its HTTP URL) just gets the message."
+  (message "𝖥𝖫∀𝖬∫: build queued")
+  (when (and base stex-build-auto-dashboard)
+    (browse-url (stex--dashboard-url base "queue"))))
+
 (defun stex--build-request (method)
-  "Send build request METHOD (\"flams/buildOne\" or \"flams/buildAll\")."
-  (let ((server (stex--current-server))
-        (uri (stex--buffer-uri)))
+  "Send build request METHOD (\"flams/buildOne\" or \"flams/buildAll\").
+Pure LSP, same as always -- the HTTP base URL (needed only to maybe
+open the dashboard afterward, see `stex--handle-build-request-result')
+is read opportunistically and left nil rather than waited for, so a
+build never blocks on or requires the server having reported it yet."
+  (let* ((server (stex--current-server))
+         (base (and (stex-eglot-server-p server)
+                    (stex-eglot-server-http-url server)))
+         (uri (stex--buffer-uri)))
     (jsonrpc-async-request
      server method (list :uri uri)
-     :success-fn (lambda (_result)
-                   (message "𝖥𝖫∀𝖬∫: build queued"))
+     :success-fn (apply-partially #'stex--handle-build-request-result base)
      :error-fn (jsonrpc-lambda (&key message &allow-other-keys)
                  (message "𝖥𝖫∀𝖬∫: build request failed: %s" message)))))
 
@@ -785,6 +831,16 @@ anywhere yet."
   "Ask FLAMS to recursively build starting from the current file."
   (interactive)
   (stex--build-request "flams/buildAll"))
+
+;;;###autoload
+(defun stex-build-dashboard ()
+  "Open FLAMS's build dashboard in a browser.
+This is the same live build-queue/log page the VS Code extension
+shows in a webview panel -- FLAMS serves it directly over HTTP, so
+`stex-mode' just points your browser at it (no in-Emacs webview
+rendering, same tradeoff as `stex-preview-browser')."
+  (interactive)
+  (browse-url (stex--dashboard-url (stex--server-http-url))))
 
 (defun stex--export-request (method prompt)
   "Send export request METHOD, to a directory chosen via PROMPT."

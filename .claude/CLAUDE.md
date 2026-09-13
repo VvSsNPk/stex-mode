@@ -43,8 +43,11 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   exe ...)` from the `eglot-server-programs` contact function) instead of
   the generic one, purely so there's a slot (`stex-eglot-server-http-url`)
   to stash the HTTP base URL the server reports over the `flams/serverURL`
-  notification. MathHub browsing is the only thing that needs it — build/
-  export commands are pure LSP and don't touch HTTP at all.
+  notification. MathHub browsing is the only thing that *requires* it —
+  build/export commands stay pure LSP: `stex-build-file`/`stex-build-all`
+  read it opportunistically (nil if not yet known, never waited for) purely
+  to maybe open the build dashboard afterward, and never let a missing URL
+  block or fail the build itself. See `stex--handle-build-request-result`.
 - MathHub browsing (`stex-mathhub-open-file`, `stex-mathhub-insert-usemodule`)
   is **local archives only** — no remote-server merge/install (`flams.ts`'s
   dual local+remote tree in `mathhub.ts`) and no fuzzy module search (that's
@@ -83,6 +86,16 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   rather than trusted from its simplified tutorial prose, which undersells
   what a couple of them accept (`\symref` also takes `\symname`'s `pre=`/
   `post=`, for instance — not mentioned in the prose description).
+- Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
+  Code extension's build-progress webview turned out to be a plain
+  `<iframe>` onto a page `flams` serves itself over HTTP
+  (`<http-url>/dashboard/queue`, `commands.ts`'s `Dashboard` class) — no
+  vscode-specific rendering to port. `stex-build-file`/`stex-build-all`
+  open that page in a browser after queuing a build, gated by
+  `stex-build-auto-dashboard` (default on, mirroring vscode's own
+  unconditional `.then(() => DASHBOARD.show(...))`); `stex-build-dashboard`
+  opens the general dashboard page on demand. Same `browse-url`, no-in-
+  Emacs-webview tradeoff as `stex-preview-browser`.
 - Not implemented: remote MathHub browsing/install, HTML/quiz preview
   panes, the fuzzy module-search UI, call-hierarchy view,
   `vscode://flams/open`-equivalent URI handling. These map to the remote-

@@ -38,6 +38,7 @@ Enabling it in a buffer:
 | `C-c C-x c` | `stex-connect`                    | (Re)verify setup and connect |
 | `C-c C-x f` | `stex-build-file`                 | Build the current file |
 | `C-c C-x F` | `stex-build-all`                  | Build recursively from the current file |
+| `C-c C-x d` | `stex-build-dashboard`            | Open the build dashboard (queue, log) in a browser |
 | `C-c C-x e` | `stex-export-tex`                 | Export a standalone `.tex` package |
 | `C-c C-x E` | `stex-export-html`                | Export standalone HTML |
 | `C-c C-x p` | `stex-preview-browser`            | Build an HTML preview and open it in a browser |
@@ -48,6 +49,16 @@ Enabling it in a buffer:
 | `C-c C-x U` | `stex-mathhub-update`             | `git pull` local archives (see scopes below) |
 | `C-c C-x h` | `stex-show-call-hierarchy`        | Call hierarchy for the symbol at point (side window) |
 | `C-c C-x i` | `imenu`                           | Jump to a symbol in the current file |
+
+The VS Code extension shows build progress in a webview panel, which
+turns out to just be an `<iframe>` onto a page `flams` serves directly
+over plain HTTP (`/dashboard/queue`) -- nothing VS Code-specific about
+it. `stex-build-file`/`stex-build-all` open that same page in your
+browser right after queuing a build (set `stex-build-auto-dashboard` to
+nil to turn that off), and `stex-build-dashboard` opens it on demand.
+No in-Emacs webview rendering -- same tradeoff as `stex-preview-browser`
+below, and it only needs the server's HTTP URL, which it reads
+opportunistically without ever blocking a build on it.
 
 The last two aren't really `stex-mode`-specific: call hierarchy and
 document symbols are `eglot`'s own generic LSP features (`imenu` is wired
@@ -189,6 +200,11 @@ completion list for the current buffer -- no new command, no rebinding.
   automatically whenever the server reports a fresh HTML build, rather
   than just messaging that one's ready (default: off, to avoid surprise
   browser tabs).
+- `stex-build-auto-dashboard` -- whether `stex-build-file`/`stex-build-all`
+  should open the build dashboard automatically after queuing a build
+  (default: on, matching the VS Code extension's own always-on behavior
+  there; unlike `stex-preview-auto-open`, this is a direct response to
+  your own explicit build command, not an unsolicited server push).
 
 ## Getting flams and sTeX
 
