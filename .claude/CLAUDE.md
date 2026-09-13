@@ -73,6 +73,16 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   A no-op when AUCTeX isn't loaded (`fboundp` guarded); no-op on disable too,
   since AUCTeX has no matching "forget an environment" API. Argument/keyval
   lists are transcribed from the STEX manual, not invented.
+- Macro insertion (`stex--register-macros`, same enable-body call site) is the
+  same idea applied to AUCTeX's `TeX-insert-macro` command (`C-c C-m`), via
+  `TeX-add-symbols` instead of `LaTeX-add-environments` — covers `\symdecl`/
+  `\symdecl*`, `\textsymdecl`, `\symdef`, `\notation`/`\notation*`, `\symref`/
+  `\sr`, `\symname`/`\sn`, `\symuse`, `\definiendum`, `\definame`. The
+  `\symref`/`\definiendum`/`\definame` keyval option sets were cross-checked
+  against their actual `expl3` definitions in the STEX manual's appendix
+  rather than trusted from its simplified tutorial prose, which undersells
+  what a couple of them accept (`\symref` also takes `\symname`'s `pre=`/
+  `post=`, for instance — not mentioned in the prose description).
 - Not implemented: remote MathHub browsing/install, HTML/quiz preview
   panes, the fuzzy module-search UI, call-hierarchy view,
   `vscode://flams/open`-equivalent URI handling. These map to the remote-

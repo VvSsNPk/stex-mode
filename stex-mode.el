@@ -102,6 +102,11 @@
 ;; -- prompting for each one's `key=val' options (title=, style=, id=,
 ;; ...) the same way `C-c C-e' already prompts for e.g. a `tabular'
 ;; environment's column format.  See `stex--register-environments'.
+;; Likewise, its `C-c C-m' (`TeX-insert-macro') gains sTeX's symbol-
+;; declaration and notation macros -- `\symdecl', `\textsymdecl',
+;; `\symdef', `\notation', `\symref'/`\sr', `\symname'/`\sn', `\symuse',
+;; `\definiendum' and `\definame' -- with the same kind of `key=val'
+;; prompting.  See `stex--register-macros'.
 ;;
 ;; Not implemented (yet): the quiz preview pane, the fuzzy
 ;; module-search UI, remote MathHub browsing and archive installation,
@@ -512,6 +517,86 @@ candidates in a plain LaTeX buffer are harmless."
      ;; still worth having on the `C-c C-e' completion list.
      "sproof" "subproof" "blindfragment" "hint" "exnote" "gnote")))
 
+;;; sTeX macro insertion (AUCTeX `C-c C-m' integration)
+
+;; Same idea as `stex--register-environments', but for macros rather
+;; than environments -- `TeX-add-symbols' is AUCTeX's macro-side
+;; counterpart to `LaTeX-add-environments', feeding `TeX-insert-macro'
+;; (`C-c C-m' by default).  Argument lists mirror the STEX manual,
+;; chapter 7 (Modules and Symbols) for `\symdecl' & co. and section 7.4
+;; (Notations and Semantic Macros) for `\notation'; the `\definiendum'/
+;; `\definame'/`\symref' keyval option sets were cross-checked against
+;; their actual expl3 definitions (STEX manual, appendix listing the
+;; package source) since the prose there undersells what they accept
+;; -- e.g. `\symref' turns out to take the same optional `pre=,post='
+;; arguments as `\symname', which the tutorial text alone doesn't say.
+
+(defconst stex--symdecl-keyval-options
+  '(("name") ("args") ("type") ("def") ("return")
+    ("assoc" "pre" "bin" "binl" "binr" "conj")
+    ("reorder") ("role"))
+  "Optional keyword arguments of `\\symdecl' (and `\\symdecl*').")
+
+(defconst stex--textsymdecl-keyval-options
+  '(("type") ("def") ("return")
+    ("assoc" "pre" "bin" "binl" "binr" "conj")
+    ("reorder") ("role"))
+  "Optional keyword arguments of `\\textsymdecl'.
+Like `stex--symdecl-keyval-options', minus `args' -- a `\\textsymdecl'
+symbol always has arity 0.")
+
+(defconst stex--notation-keyval-options
+  '(("prec") ("op") ("variant"))
+  "Optional keyword arguments of `\\notation' (and `\\notation*').")
+
+(defconst stex--symdef-keyval-options
+  (append stex--symdecl-keyval-options stex--notation-keyval-options)
+  "Optional keyword arguments of `\\symdef'.
+Per the STEX manual, \\symdef \"combines the functionalities and
+optional arguments of \\symdecl and \\notation\" -- hence this is just
+`stex--symdecl-keyval-options' and `stex--notation-keyval-options'
+appended.")
+
+(defconst stex--symname-keyval-options
+  '(("pre") ("post"))
+  "Optional keyword arguments of `\\symname'/`\\sn' and `\\symref'/`\\sr'.")
+
+(defconst stex--definiendum-keyval-options
+  '(("gf") ("root"))
+  "Optional keyword arguments of `\\definiendum'.
+Unlike `\\definame', has no `pre'/`post' -- `\\definiendum' takes its
+display text explicitly.")
+
+(defconst stex--definame-keyval-options
+  '(("pre") ("post") ("gf") ("root"))
+  "Optional keyword arguments of `\\definame'.
+Inherits `\\symname's `pre'/`post' plus its own `gf'/`root'.")
+
+(defun stex--register-macros ()
+  "Teach AUCTeX's `TeX-insert-macro' command about sTeX's macros.
+A no-op unless AUCTeX is loaded.  Adds to the *current buffer's* macro
+list only -- see `stex--register-environments' for the same idea
+applied to environments, including the caveat about there being no way
+to undo this when `stex-mode' is disabled again."
+  (when (fboundp 'TeX-add-symbols)
+    (TeX-add-symbols
+     '("symdecl" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])
+     '("symdecl*" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])
+     '("textsymdecl" "Macro name"
+       [TeX-arg-key-val stex--textsymdecl-keyval-options] "Output")
+     '("symdef" "Macro name"
+       [TeX-arg-key-val stex--symdef-keyval-options] "Notation")
+     '("notation" "Symbol" [TeX-arg-key-val stex--notation-keyval-options] "Notation")
+     '("notation*" "Symbol" [TeX-arg-key-val stex--notation-keyval-options] "Notation")
+     '("symref" [TeX-arg-key-val stex--symname-keyval-options] "Symbol" "Text")
+     '("sr" [TeX-arg-key-val stex--symname-keyval-options] "Symbol" "Text")
+     '("symname" [TeX-arg-key-val stex--symname-keyval-options] "Symbol")
+     '("sn" [TeX-arg-key-val stex--symname-keyval-options] "Symbol")
+     '("symuse" "Symbol")
+     '("definiendum" [TeX-arg-key-val stex--definiendum-keyval-options]
+       "Symbol" "Text")
+     '("definame" [TeX-arg-key-val stex--definame-keyval-options] "Symbol"))))
+
 ;;;###autoload
 (define-minor-mode stex-mode
   "Minor mode connecting the current buffer to the FLAMS/sTeX LSP server.
@@ -521,9 +606,11 @@ Enabling this in a `latex-mode'/`LaTeX-mode' buffer makes eglot launch
 mode in this buffer) and makes `stex-build-file', `stex-build-all',
 `stex-export-tex' and `stex-export-html' available.  It also teaches
 AUCTeX's `LaTeX-environment' command about sTeX environments like
-`smodule', `sparagraph' and `sdefinition' -- see
-`stex--register-environments'.  See `stex-mode-map' for the full
-command list and its shared prefix."
+`smodule', `sparagraph' and `sdefinition' (see
+`stex--register-environments') and its `TeX-insert-macro' command
+about sTeX macros like `\\symdecl', `\\notation' and `\\symref' (see
+`stex--register-macros').  See `stex-mode-map' for the full command
+list and its shared prefix."
   :lighter " sTeX"
   :keymap stex-mode-map
   (if stex-mode
@@ -534,6 +621,7 @@ command list and its shared prefix."
                         (cons stex--eglot-server-program-entry
                               eglot-server-programs))
             (stex--register-environments)
+            (stex--register-macros)
             (eglot-ensure))
         (error
          (setq stex-mode nil)

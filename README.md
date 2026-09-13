@@ -140,6 +140,31 @@ buffer (see `stex--register-environments`). Argument lists follow the
 STEX manual's chapters on document features, modules/symbols and
 statements.
 
+## Inserting sTeX macros
+
+The same idea applies to AUCTeX's `TeX-insert-macro` command (`C-c C-m`
+by default): with AUCTeX loaded, enabling `stex-mode` teaches it sTeX's
+symbol-declaration and notation macros too (see `stex--register-macros`):
+
+| Macro | Prompts for |
+|-------|--------------|
+| `\symdecl`, `\symdecl*` | The macro name, then `name`, `args`, `type`, `def`, `return`, `assoc`, `reorder`, `role` options |
+| `\textsymdecl` | The macro name, then those same options minus `args` (a `\textsymdecl` symbol always has arity 0), then the output code |
+| `\symdef` | The macro name, then `\symdecl`'s and `\notation`'s options combined, then the notation |
+| `\notation`, `\notation*` | The symbol, then `prec`, `op`, `variant` options, then the notation code |
+| `\symref`, `\sr` | `pre`, `post` options, then the symbol, then the text |
+| `\symname`, `\sn` | `pre`, `post` options, then the symbol |
+| `\symuse` | Just the symbol |
+| `\definiendum` | `gf`, `root` options, then the symbol, then the text |
+| `\definame` | `pre`, `post`, `gf`, `root` options, then the symbol |
+
+The `\symref`/`\definiendum`/`\definame` option sets were checked against
+their actual `expl3` definitions rather than the STEX manual's simplified
+tutorial prose, which undersells what a couple of them accept (`\symref`
+turns out to take the same `pre=`/`post=` options as `\symname`, for
+instance). As with environments, this only extends AUCTeX's existing
+completion list for the current buffer -- no new command, no rebinding.
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:
