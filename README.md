@@ -114,6 +114,32 @@ remote server), and no fuzzy module search (that one's FLAMS's own web UI,
 not a documented REST endpoint -- nothing to reuse without embedding a
 browser).
 
+## Inserting sTeX environments
+
+If [AUCTeX](https://www.gnu.org/software/auctex/) is loaded, enabling
+`stex-mode` also teaches its `LaTeX-environment` command (`C-c C-e` by
+default) about sTeX's own environments, the same way loading a LaTeX
+package's style file would. `C-c C-e smodule RET` and the like now prompt
+for that environment's actual options (`title=`, `style=`, `id=`, ...)
+instead of leaving you to type `[key=val,...]{...}` out by hand:
+
+| Environment | Prompts for |
+|-------------|--------------|
+| `smodule` | `title`, `style`, `id`, `ns`, `lang`, `sig` options, then the module name |
+| `sfragment` | `id`, `short` options, then the section title |
+| `sparagraph`, `sdefinition`, `sassertion`, `sexample` | `for`, `style`, `title`, `id`, `name`, `macro` options (`style` completes to `theorem`/`lemma`/`corollary`/`axiom`/`definition`/`example`/`counterexample`) |
+| `mathstructure` | The structure name, then `name`, `this` options |
+| `sproblem`, `subproblem` | `id`, `pts`, `min`, `title` options |
+| `solution` | `id`, `title`, `style`, `testspace`, `answerclass` options |
+
+`sproof`, `subproof`, `blindfragment`, `hint`, `exnote` and `gnote` are
+also added to the completion list, without special option prompting.
+Nothing here rebinds `C-c C-e` or adds a new command -- it only extends
+the list AUCTeX's own command already completes over, for the current
+buffer (see `stex--register-environments`). Argument lists follow the
+STEX manual's chapters on document features, modules/symbols and
+statements.
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:

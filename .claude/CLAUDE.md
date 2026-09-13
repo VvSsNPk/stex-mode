@@ -63,6 +63,16 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   insertion-point rule (after `\begin{document}`, skipping blank/existing
   `\usemodule`/`\importmodule` lines; falls back to the very top of the
   buffer if there's no `\begin{document}` at all).
+- Environment insertion (`stex--register-environments`, called from `stex-mode`'s
+  enable body) teaches AUCTeX's own `LaTeX-environment` command (`C-c C-e`)
+  about sTeX's environments (`smodule`, `sfragment`, `sparagraph`,
+  `sdefinition`, `sassertion`, `sexample`, `mathstructure`, `sproblem`,
+  `subproblem`, `solution`, plus a few added with no special prompting) via
+  `LaTeX-add-environments`/`LaTeX-env-args`/`TeX-arg-key-val` — the standard
+  AUCTeX style-hook mechanism, not a bespoke command of this package's own.
+  A no-op when AUCTeX isn't loaded (`fboundp` guarded); no-op on disable too,
+  since AUCTeX has no matching "forget an environment" API. Argument/keyval
+  lists are transcribed from the STEX manual, not invented.
 - Not implemented: remote MathHub browsing/install, HTML/quiz preview
   panes, the fuzzy module-search UI, call-hierarchy view,
   `vscode://flams/open`-equivalent URI handling. These map to the remote-

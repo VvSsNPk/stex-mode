@@ -95,6 +95,14 @@
 ;; See `stex-mode-map' for a `C-c C-x'-prefixed binding to every
 ;; command above.
 ;;
+;; If AUCTeX is loaded, `stex-mode' also extends its `C-c C-e'
+;; (`LaTeX-environment') with sTeX's own environments -- `smodule',
+;; `sparagraph', `sdefinition', `sassertion', `sexample', `sfragment',
+;; `mathstructure', `sproblem'/`subproblem', `solution' and a few more
+;; -- prompting for each one's `key=val' options (title=, style=, id=,
+;; ...) the same way `C-c C-e' already prompts for e.g. a `tabular'
+;; environment's column format.  See `stex--register-environments'.
+;;
 ;; Not implemented (yet): the quiz preview pane, the fuzzy
 ;; module-search UI, remote MathHub browsing and archive installation,
 ;; and the interactive flams/stex download-and-install wizard that the
@@ -438,6 +446,72 @@ using it).
 \\[imenu]  `imenu' (built into Emacs; eglot wires it to flams's
   documentSymbol support automatically, nothing to bind ourselves)")
 
+;;; sTeX environment insertion (AUCTeX `C-c C-e' integration)
+
+;; This doesn't add a command or a binding of its own -- it teaches
+;; AUCTeX's own `LaTeX-environment' (already on `C-c C-e' by default)
+;; about sTeX's environments, the same way a package's own
+;; `TeX-add-style-hook' would.  `LaTeX-add-environments' extends the
+;; *current buffer's* completion list for that command; the insertion
+;; functions below just describe each environment's optional/mandatory
+;; arguments so `C-c C-e' prompts for `title=', `id=', &c. instead of
+;; leaving you to type `[key=val,...]{...}' out by hand.  Argument
+;; lists mirror the STEX manual (chapters 6-8: Document Features,
+;; Modules and Symbols, Statements) -- see `stex-doc.pdf' if present.
+
+(defconst stex--smodule-keyval-options
+  '(("title") ("style") ("id") ("ns") ("lang") ("sig"))
+  "Optional keyword arguments of the `smodule' environment.")
+
+(defconst stex--sfragment-keyval-options
+  '(("id") ("short"))
+  "Optional keyword arguments of the `sfragment' environment.")
+
+(defconst stex--statement-keyval-options
+  '(("for") ("style" "theorem" "lemma" "corollary" "axiom" "definition"
+             "example" "counterexample")
+    ("title") ("id") ("name") ("macro"))
+  "Optional keyword arguments shared by `sdefinition', `sassertion',
+`sexample' and `sparagraph' (STEX manual, chapter 8: Statements).")
+
+(defconst stex--mathstructure-keyval-options
+  '(("name") ("this"))
+  "Optional keyword arguments of the `mathstructure' environment.")
+
+(defconst stex--problem-keyval-options
+  '(("id") ("pts") ("min") ("title"))
+  "Optional keyword arguments of the `sproblem'/`subproblem' environments.")
+
+(defconst stex--solution-keyval-options
+  '(("id") ("title") ("style") ("testspace") ("answerclass"))
+  "Optional keyword arguments of the `solution' environment.")
+
+(defun stex--register-environments ()
+  "Teach AUCTeX's `LaTeX-environment' command about sTeX's environments.
+A no-op unless AUCTeX (not just plain Emacs `latex-mode') is loaded.
+Adds to the *current buffer's* environment list only, same as any
+`TeX-add-style-hook'; there is no matching \"forget\" API to undo this
+when `stex-mode' is disabled again, but a few extra completion
+candidates in a plain LaTeX buffer are harmless."
+  (when (fboundp 'LaTeX-add-environments)
+    (LaTeX-add-environments
+     '("smodule" LaTeX-env-args
+       [TeX-arg-key-val stex--smodule-keyval-options] "Module name")
+     '("sfragment" LaTeX-env-args
+       [TeX-arg-key-val stex--sfragment-keyval-options] "Section title")
+     '("sparagraph" LaTeX-env-args [TeX-arg-key-val stex--statement-keyval-options])
+     '("sdefinition" LaTeX-env-args [TeX-arg-key-val stex--statement-keyval-options])
+     '("sassertion" LaTeX-env-args [TeX-arg-key-val stex--statement-keyval-options])
+     '("sexample" LaTeX-env-args [TeX-arg-key-val stex--statement-keyval-options])
+     '("mathstructure" LaTeX-env-args
+       "Structure name" [TeX-arg-key-val stex--mathstructure-keyval-options])
+     '("sproblem" LaTeX-env-args [TeX-arg-key-val stex--problem-keyval-options])
+     '("subproblem" LaTeX-env-args [TeX-arg-key-val stex--problem-keyval-options])
+     '("solution" LaTeX-env-args [TeX-arg-key-val stex--solution-keyval-options])
+     ;; No special argument handling documented/needed for these --
+     ;; still worth having on the `C-c C-e' completion list.
+     "sproof" "subproof" "blindfragment" "hint" "exnote" "gnote")))
+
 ;;;###autoload
 (define-minor-mode stex-mode
   "Minor mode connecting the current buffer to the FLAMS/sTeX LSP server.
@@ -445,8 +519,11 @@ using it).
 Enabling this in a `latex-mode'/`LaTeX-mode' buffer makes eglot launch
 `flams --lsp' for it (ahead of any other server configured for that
 mode in this buffer) and makes `stex-build-file', `stex-build-all',
-`stex-export-tex' and `stex-export-html' available.  See
-`stex-mode-map' for the full command list and its shared prefix."
+`stex-export-tex' and `stex-export-html' available.  It also teaches
+AUCTeX's `LaTeX-environment' command about sTeX environments like
+`smodule', `sparagraph' and `sdefinition' -- see
+`stex--register-environments'.  See `stex-mode-map' for the full
+command list and its shared prefix."
   :lighter " sTeX"
   :keymap stex-mode-map
   (if stex-mode
@@ -456,6 +533,7 @@ mode in this buffer) and makes `stex-build-file', `stex-build-all',
             (setq-local eglot-server-programs
                         (cons stex--eglot-server-program-entry
                               eglot-server-programs))
+            (stex--register-environments)
             (eglot-ensure))
         (error
          (setq stex-mode nil)
@@ -688,9 +766,16 @@ alists for objects and lists for arrays."
       (user-error "𝖥𝖫∀𝖬∫: request to %s failed" full-url))
     (unwind-protect
         (with-current-buffer buf
-          (goto-char (point-min))
-          (unless (re-search-forward "\n\n" nil t)
+          ;; Use url-http's own header/body boundary marker rather
+          ;; than searching for a literal "\n\n" -- a real HTTP
+          ;; response uses CRLF line endings, so "\r\n\r\n" has no
+          ;; adjacent LF-LF pair for a plain "\n\n" search to find;
+          ;; url-http-end-of-headers is set by url-http.el itself,
+          ;; from actually parsing the response, so it's correct
+          ;; regardless of the exact line-ending bytes used.
+          (unless (and (boundp 'url-http-end-of-headers) url-http-end-of-headers)
             (user-error "𝖥𝖫∀𝖬∫: malformed HTTP response from %s" full-url))
+          (goto-char url-http-end-of-headers)
           (json-parse-string (buffer-substring (point) (point-max))
                               :object-type 'alist
                               :array-type 'list))
