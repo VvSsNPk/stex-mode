@@ -127,6 +127,26 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   match. Not transitive (a used module's own imports aren't followed)
   and doesn't honor a `\symdecl`'s `name=` override — both deliberate
   scope cuts, not oversights.
+- Macro-name completion (`stex--macro-name-completion-at-point`,
+  `stex--macro-prefix-bounds`, same registration site) is the other half
+  of symbol completion above: a non-starred `\symdecl`/`\textsymdecl`/
+  `\symdef` doesn't just declare a symbol, it also generates a same-named
+  semantic macro (STEX manual §7.2) — e.g. `\symdef{mult}[...]{...}`
+  produces a real `\mult` macro, usable directly in the document, that
+  AUCTeX's own completion has no way to know about (it only tracks
+  `\newcommand`/`\def`-declared macros). `stex--known-symbol-names` grew
+  a `macros-only` parameter (threaded through
+  `stex--symdecl-names-in-current-buffer`/`stex--symdecl-names-in-file`)
+  to correctly exclude `\symdecl*` declarations here — the starred variant
+  explicitly does *not* generate a macro (confirmed from the manual's own
+  wording), so it's still offered by the bare-symbol-name completion above
+  but not by this one. Caught and fixed one real bug while building this:
+  the first draft returned candidates as `"\\NAME"` (backslash included),
+  which would have inserted a second backslash next to the one already in
+  the buffer — `stex--macro-prefix-bounds` deliberately excludes the
+  backslash from the replaced region (BEG is set *after* it), same
+  convention as everywhere else in the file that reads a macro name, so
+  candidates must be bare names.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP

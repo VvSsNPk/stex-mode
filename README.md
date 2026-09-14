@@ -227,6 +227,18 @@ doesn't honor an explicit `name=` override in a `\symdecl`'s options
 (both deliberately out of scope). See `stex--register-macros` and
 `stex--symbol-completion-at-point`.
 
+A non-starred `\symdecl`/`\textsymdecl`/`\symdef` doesn't just declare a
+symbol -- it also generates a same-named semantic macro usable directly
+in the document (e.g. `\symdef{mult}[...]{...}` gives you a real `\mult`
+macro to write, per the STEX manual's "Semantic Macros" section). AUCTeX's
+own macro completion has no way to know that, since it only tracks macros
+declared the ordinary way (`\newcommand`/`\def`). So `stex-mode` also
+completes `\NAME` for every such declaration, anywhere in the buffer --
+same source data as above, just offered as a macro invocation instead of
+a bare symbol-argument reference, and (correctly) excluding `\symdecl*`
+declarations, which explicitly don't generate a macro. See
+`stex--macro-name-completion-at-point`.
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:

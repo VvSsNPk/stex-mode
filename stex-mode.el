@@ -119,8 +119,11 @@
 ;; `\sn'/`\symuse'/`\definiendum'/`\definame', drawn from `\symdecl'-
 ;; style declarations found by scanning this buffer (and, best-effort,
 ;; any local file it `\usemodule's) -- a local stand-in for the LSP
-;; completion `flams' itself doesn't yet implement.  See
-;; `stex--register-macros'.
+;; completion `flams' itself doesn't yet implement.  A non-starred
+;; `\symdecl'/`\textsymdecl'/`\symdef' also generates a same-named
+;; semantic macro, so those same declarations additionally complete as
+;; `\NAME' anywhere else in the buffer, not just inside those macros'
+;; own symbol argument.  See `stex--register-macros'.
 ;;
 ;; Not implemented (yet): the quiz preview pane, the fuzzy
 ;; module-search UI, remote MathHub browsing and archive installation,
@@ -707,29 +710,37 @@ Unlike `stex--notation-arg-macros', this is the *first* `{...}'
 argument (after skipping a possible leading `[options]'), not the
 last -- see `stex--symbol-arg-open-p'.")
 
-(defun stex--symdecl-names-in-current-buffer ()
+(defun stex--symdecl-names-in-current-buffer (&optional macros-only)
   "Return symbol names declared in the current buffer, in order.
 Scans for `stex--symdecl-macro-names' (and `\\symdecl*'), taking each
-one's own first `{...}' argument as the declared name."
+one's own first `{...}' argument as the declared name.  When
+MACROS-ONLY is non-nil, skip `\\symdecl*' declarations -- the starred
+variant explicitly does *not* generate a same-named semantic macro
+\(STEX manual: \"does not generate a semantic macro\"), unlike plain
+`\\symdecl'/`\\textsymdecl'/`\\symdef', so a symbol declared that way has
+no `\\name' macro to complete to, only a bare name to reference via
+`\\symname'/`\\sr' & co."
   (let (names (case-fold-search nil))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward
               (concat "\\\\\\(?:" (regexp-opt stex--symdecl-macro-names) "\\)"
-                      "\\*?[ \t\n]*{\\([^{}]*\\)}")
+                      "\\(\\*?\\)[ \t\n]*{\\([^{}]*\\)}")
               nil t)
-        (push (match-string-no-properties 1) names)))
+        (unless (and macros-only (equal (match-string-no-properties 1) "*"))
+          (push (match-string-no-properties 2) names))))
     (nreverse names)))
 
-(defun stex--symdecl-names-in-file (file)
+(defun stex--symdecl-names-in-file (file &optional macros-only)
   "Like `stex--symdecl-names-in-current-buffer', applied to FILE.
+MACROS-ONLY is passed through -- see `stex--symdecl-names-in-current-buffer'.
 Reads FILE into a throwaway buffer rather than visiting it, so this
 never adds to `buffer-list' or triggers major-mode/`stex-mode' setup.
 Returns nil (rather than erroring) if FILE can't be read."
   (condition-case nil
       (with-temp-buffer
         (insert-file-contents file)
-        (stex--symdecl-names-in-current-buffer))
+        (stex--symdecl-names-in-current-buffer macros-only))
     (error nil)))
 
 (defun stex--local-usemodule-targets ()
@@ -766,13 +777,14 @@ visiting a file at all."
           (file-expand-wildcards (expand-file-name (concat base ".??.tex") dir))))
        (stex--local-usemodule-targets)))))
 
-(defun stex--known-symbol-names ()
+(defun stex--known-symbol-names (&optional macros-only)
   "All symbol names available for completion at point.
 This buffer's own declarations plus those in
-`stex--resolve-local-usemodule-files', deduplicated."
+`stex--resolve-local-usemodule-files', deduplicated.  MACROS-ONLY is
+passed through -- see `stex--symdecl-names-in-current-buffer'."
   (delete-dups
-   (append (stex--symdecl-names-in-current-buffer)
-           (mapcan #'stex--symdecl-names-in-file
+   (append (stex--symdecl-names-in-current-buffer macros-only)
+           (mapcan (lambda (f) (stex--symdecl-names-in-file f macros-only))
                     (stex--resolve-local-usemodule-files)))))
 
 (defun stex--symbol-arg-open-p (open-pos)
@@ -803,6 +815,36 @@ this function's."
         (list beg (save-excursion (goto-char beg) (skip-chars-forward "^{}") (point))
               (stex--known-symbol-names) :exclusive 'no)))))
 
+(defun stex--macro-prefix-bounds ()
+  "If point is right after a partial macro name, return its (BEG . END).
+I.e. point is positioned as `\\NAME', NAME possibly empty, being typed
+-- BEG is right after the backslash, END is point.  Return nil
+otherwise."
+  (save-excursion
+    (let ((end (point)))
+      (skip-chars-backward "A-Za-z@*")
+      (when (and (eq (char-before) (aref TeX-esc 0))
+                 (not (TeX-escaped-p (1- (point)))))
+        (cons (point) end)))))
+
+(defun stex--macro-name-completion-at-point ()
+  "`completion-at-point-functions' entry completing sTeX symbols as macros.
+Offers `\\NAME' for every symbol NAME declared in scope that also
+generates a same-named semantic macro (`stex--known-symbol-names' with
+MACROS-ONLY set -- skips bare `\\symdecl*' declarations, which don't).
+Complementary to `stex--symbol-completion-at-point': that one offers
+the bare NAME inside `\\symref' & co.'s own symbol argument; this one
+offers NAME as a macro invocation anywhere else (the backslash is
+already in the buffer -- `stex--macro-prefix-bounds' excludes it from
+the replaced region, same as it would for any other macro name), which
+is what a non-starred `\\symdecl'/`\\textsymdecl'/`\\symdef' declaration
+actually produces (STEX manual, section 7.2) but which AUCTeX's own
+macro completion has no way to know about, since it isn't declared via
+`\\newcommand'/`\\def'."
+  (let ((bounds (stex--macro-prefix-bounds)))
+    (when bounds
+      (list (car bounds) (cdr bounds) (stex--known-symbol-names t) :exclusive 'no))))
+
 (defun stex--register-macros ()
   "Teach AUCTeX's `TeX-insert-macro' command about sTeX's macros.
 A no-op unless AUCTeX is loaded.  Adds to the *current buffer's* macro
@@ -812,14 +854,17 @@ to undo this when `stex-mode' is disabled again.  Also adds
 `stex--in-notation-arg-p' to `fill-nobreak-predicate', same as
 AUCTeX's own `LaTeX-common-initialization' does for `\\verb'-like
 macros, so `M-q'/auto-fill never rewraps a notation/output argument.
-Also adds `stex--symbol-completion-at-point' to
-`completion-at-point-functions', for symbol completion where `flams'
-itself currently offers none -- see that function."
+Also adds `stex--symbol-completion-at-point' and
+`stex--macro-name-completion-at-point' to `completion-at-point-functions',
+for symbol/macro-name completion where `flams' itself currently offers
+none -- see those functions."
   (when (fboundp 'TeX-add-symbols)
     (add-to-list (make-local-variable 'fill-nobreak-predicate)
                  #'stex--in-notation-arg-p t)
     (add-hook 'completion-at-point-functions
               #'stex--symbol-completion-at-point nil t)
+    (add-hook 'completion-at-point-functions
+              #'stex--macro-name-completion-at-point nil t)
     (TeX-add-symbols
      '("symdecl" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])
      '("symdecl*" "Macro name" [TeX-arg-key-val stex--symdecl-keyval-options])
