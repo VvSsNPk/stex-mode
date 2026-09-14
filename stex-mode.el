@@ -109,10 +109,17 @@
 ;; ...) the same way `C-c C-e' already prompts for e.g. a `tabular'
 ;; environment's column format.  See `stex--register-environments'.
 ;; Likewise, its `C-c C-m' (`TeX-insert-macro') gains sTeX's symbol-
-;; declaration and notation macros -- `\symdecl', `\textsymdecl',
-;; `\symdef', `\notation', `\symref'/`\sr', `\symname'/`\sn', `\symuse',
-;; `\definiendum' and `\definame' -- with the same kind of `key=val'
-;; prompting.  It also stops `M-q'/auto-fill from reflowing `\notation'/
+;; declaration, notation, variable and cross-reference macros --
+;; `\symdecl', `\textsymdecl', `\symdef', `\notation', `\symref'/`\sr',
+;; `\symname'/`\sn'/`\Symname'/`\Sn'/`\sns'/`\Sns', `\symuse',
+;; `\definiendum', `\definame'/`\Definame', `\defnotation',
+;; `\definiens', `\vardef', `\varnotation', `\varseq', `\svar',
+;; `\varbind', `\varref', `\varname'/`\Varname', `\premise',
+;; `\conclusion', `\comp', `\maincomp', `\setnotation', `\arg'/`\arg*',
+;; `\srefsym', `\srefsymuri', `\sref', `\extref', `\srefsetin',
+;; `\sreflabel', `\inputref', `\mhinput' and `\requiremodule' -- with
+;; the same kind of `key=val' prompting where applicable.  It also
+;; stops `M-q'/auto-fill from reflowing `\notation'/
 ;; `\symdef''s notation argument or `\textsymdecl''s output argument,
 ;; since those hold presentation code, not prose.  It also offers
 ;; completion for the symbol argument of `\symref'/`\sr'/`\symname'/
@@ -608,6 +615,41 @@ display text explicitly.")
   "Optional keyword arguments of `\\definame'.
 Inherits `\\symname's `pre'/`post' plus its own `gf'/`root'.")
 
+;; The rest of this section is a second pass filling in macros missed
+;; the first time around -- found by grepping the STEX manual's own
+;; command index (its final appendix) for every macro documented
+;; there, then cross-checking each candidate's argument shape against
+;; its expl3 `\NewDocumentCommand'/`\newcommand' definition in the
+;; manual's literate-source appendix, same as the first pass.  Mostly
+;; two families: `\vardef' & co. (section 7.6, Variables and
+;; Sequences -- STEX's answer to "a symbol, but local and outside any
+;; module") and the rest of "More on Definitions"/"More on Assertions"
+;; (sections 8.1-8.2) that `\definiendum'/`\definame' only partly
+;; covered.  Also a few straggling cross-reference/inclusion macros
+;; from chapter 6 (Document Features) that have nothing to do with
+;; symbols at all, included for the same "worth having on `C-c C-m''s
+;; list" reason the plain-string environment entries above are.
+
+(defconst stex--vardef-keyval-options
+  (append stex--symdef-keyval-options '(("bind")))
+  "Optional keyword arguments of `\\vardef'/`\\varseq'.
+`\\symdef's options (which is in turn `\\symdecl's and `\\notation's)
+plus `bind', which only variables accept -- STEX manual, section 7.6.")
+
+(defconst stex--sref-keyval-options-1
+  '(("archive") ("file") ("fallback") ("pre") ("post"))
+  "`\\sref'/`\\extref's first (source-side) optional keyval group.
+Confirmed from `\\stex_keys_define:nnnn{sref / 1}{...}' in the STEX
+manual's literate source -- the prose alone only mentions `archive'/
+`file', not `fallback'/`pre'/`post'.")
+
+(defconst stex--sref-keyval-options-2
+  '(("archive") ("file") ("title"))
+  "Second (target-side) keyval group shared by `\\sref' and `\\extref'.
+Optional for `\\sref', mandatory for `\\extref'.  From
+`\\stex_keys_define:nnnn{sref / 2}{...}' in the STEX manual's literate
+source.")
+
 ;; Forward declarations for AUCTeX symbols used outside any `fboundp'
 ;; guard (unlike `LaTeX-add-environments'/`TeX-add-symbols' &c. above,
 ;; which the byte-compiler already knows not to flag when the call is
@@ -881,7 +923,50 @@ none -- see those functions."
      '("symuse" "Symbol")
      '("definiendum" [TeX-arg-key-val stex--definiendum-keyval-options]
        "Symbol" "Text")
-     '("definame" [TeX-arg-key-val stex--definame-keyval-options] "Symbol"))))
+     '("definame" [TeX-arg-key-val stex--definame-keyval-options] "Symbol")
+     ;; Second pass -- see the comment above `stex--vardef-keyval-options'.
+     '("Symname" [TeX-arg-key-val stex--symname-keyval-options] "Symbol")
+     ;; \sns/\Sns hardcode post=s (they're literally `\def\Sns{\Symname[post=s]}'
+     ;; in the source, not independent `\NewDocumentCommand's), so unlike
+     ;; \sn/\Sn above they take only the plain symbol argument, no keyval.
+     '("sns" "Symbol")
+     '("Sns" "Symbol")
+     '("srefsym" "Symbol" "Text")
+     '("srefsymuri" "Symbol URI" "Text")
+     '("vardef" "Macro name" [TeX-arg-key-val stex--vardef-keyval-options] "Notation")
+     '("varnotation" "Variable"
+       [TeX-arg-key-val stex--notation-keyval-options] "Notation")
+     '("varseq" "Macro name" [TeX-arg-key-val stex--vardef-keyval-options]
+       "Range" "Notation")
+     '("svar" ["Name"] "Text")
+     '("varbind" "Variables (comma-separated)")
+     '("varref" [TeX-arg-key-val stex--symname-keyval-options] "Variable" "Text")
+     '("varname" [TeX-arg-key-val stex--symname-keyval-options] "Variable")
+     '("Varname" [TeX-arg-key-val stex--symname-keyval-options] "Variable")
+     '("Definame" [TeX-arg-key-val stex--definame-keyval-options] "Symbol")
+     '("defnotation" "Notation")
+     '("definiens" ["Symbol"] "Text")
+     '("premise" ["Variable"] "Text")
+     '("conclusion" ["Symbol"] "Text")
+     '("comp" "Notation component")
+     '("maincomp" "Notation component")
+     '("setnotation" "Symbol" "Notation id")
+     '("arg" ["Argument number"] "Text")
+     '("arg*" ["Argument number"] "Text")
+     '("sref" [TeX-arg-key-val stex--sref-keyval-options-1] "Label"
+       [TeX-arg-key-val stex--sref-keyval-options-2])
+     ;; \extref's third argument is the same key=val shape as \sref's
+     ;; second, but MANDATORY (STEX manual: "with the third argument
+     ;; mandatory") -- so it's given here as a plain (not `[...]'-wrapped)
+     ;; list element, which is what makes `TeX-parse-argument' insert it
+     ;; in braces instead of brackets.
+     '("extref" [TeX-arg-key-val stex--sref-keyval-options-1] "Label"
+       (TeX-arg-key-val stex--sref-keyval-options-2))
+     '("srefsetin" ["Archive"] "File" "Title")
+     '("sreflabel" "Label")
+     '("inputref" ["Archive"] "File")
+     '("mhinput" ["Archive"] "File")
+     '("requiremodule" "Module"))))
 
 ;;;###autoload
 (define-minor-mode stex-mode

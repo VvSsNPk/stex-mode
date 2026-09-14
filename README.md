@@ -166,7 +166,8 @@ statements.
 
 The same idea applies to AUCTeX's `TeX-insert-macro` command (`C-c C-m`
 by default): with AUCTeX loaded, enabling `stex-mode` teaches it sTeX's
-symbol-declaration and notation macros too (see `stex--register-macros`):
+symbol-declaration, notation, variable and cross-reference macros too
+(see `stex--register-macros`):
 
 | Macro | Prompts for |
 |-------|--------------|
@@ -178,7 +179,31 @@ symbol-declaration and notation macros too (see `stex--register-macros`):
 | `\symname`, `\sn` | `pre`, `post` options, then the symbol |
 | `\symuse` | Just the symbol |
 | `\definiendum` | `gf`, `root` options, then the symbol, then the text |
-| `\definame` | `pre`, `post`, `gf`, `root` options, then the symbol |
+| `\definame`, `\Definame` | `pre`, `post`, `gf`, `root` options, then the symbol |
+| `\Symname` | `pre`, `post` options, then the symbol (capitalizing variant of `\symname`) |
+| `\sns`, `\Sns` | Just the symbol -- these hardcode `post=s`, so no options to prompt for |
+| `\defnotation` | Just the notation (applies `\definiendum`-style highlighting to it, in math mode) |
+| `\definiens` | The symbol (optional -- only needed with several symbols in scope), then the text |
+| `\vardef` | The macro name, then `\symdef`'s options plus `bind`, then the notation |
+| `\varnotation` | The variable, then `prec`, `op`, `variant` options, then the notation |
+| `\varseq` | The macro name, then `\vardef`'s options, then the range, then the notation |
+| `\svar` | An optional display name, then the text |
+| `\varbind` | A comma-separated list of variables |
+| `\varref` | `pre`, `post` options, then the variable, then the text |
+| `\varname`, `\Varname` | `pre`, `post` options, then the variable |
+| `\premise` | An optional variable name, then the text |
+| `\conclusion` | An optional symbol, then the text |
+| `\comp`, `\maincomp` | Just the notation component to highlight |
+| `\setnotation` | The symbol, then the notation id to make default |
+| `\arg`, `\arg*` | An optional argument number, then the text |
+| `\srefsym` | The symbol, then the text |
+| `\srefsymuri` | The symbol's full URI, then the text |
+| `\sref` | `archive`/`file`/`fallback`/`pre`/`post` options, then the label, then `archive`/`file`/`title` options |
+| `\extref` | Same as `\sref`, but the second options group is mandatory (braces, not brackets) |
+| `\srefsetin` | An optional archive, then the file, then the title |
+| `\sreflabel` | Just the label |
+| `\inputref`, `\mhinput` | An optional archive, then the file |
+| `\requiremodule` | Just the module |
 
 The `\symref`/`\definiendum`/`\definame` option sets were checked against
 their actual `expl3` definitions rather than the STEX manual's simplified

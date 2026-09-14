@@ -84,6 +84,29 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   rather than trusted from its simplified tutorial prose, which undersells
   what a couple of them accept (`\symref` also takes `\symname`'s `pre=`/
   `post=`, for instance — not mentioned in the prose description).
+- Second macro-insertion pass (same function, same file region, a distinct
+  block starting at the "second pass" comment above `stex--vardef-keyval-options`):
+  filled in macros the first pass missed, found by grepping the STEX manual's
+  own command index (its final appendix, not the prose chapters) for every
+  documented macro and cross-checking each against its `expl3` source, same
+  method as the first pass. Two families: `\vardef`/`\varnotation`/`\varseq`/
+  `\svar`/`\varbind`/`\varref`/`\varname`/`\Varname` (section 7.6, Variables
+  and Sequences), and the rest of "More on Definitions"/"More on Assertions"
+  (`\Definame`, `\defnotation`, `\definiens`, `\premise`, `\conclusion`,
+  `\comp`, `\maincomp`, `\setnotation`) that `\definiendum`/`\definame` alone
+  didn't cover. Plus a few chapter-6 (Document Features) cross-reference/
+  inclusion macros with nothing to do with symbols at all (`\sref`, `\extref`,
+  `\srefsetin`, `\sreflabel`, `\inputref`, `\mhinput`, `\requiremodule`,
+  `\srefsym`, `\srefsymuri`) and the remaining `\symname` family variants
+  (`\Symname`, `\sns`/`\Sns` — the latter two are literal `\def`-aliases with
+  `post=s` hardcoded in the source, not independent `\NewDocumentCommand`s,
+  so they take only a plain symbol argument, no keyval prompt, unlike
+  `\sn`/`\Sn`). `\sref`/`\extref` share the same two keyval groups
+  (`stex--sref-keyval-options-1`/`-2`, from `\stex_keys_define:nnnn{sref /
+  1}`/`{sref / 2}` in the source) but differ in whether the second one is
+  optional or mandatory — `\extref`'s is given as a plain (non-`[...]`-wrapped)
+  `(TeX-arg-key-val ...)` list element, which is what makes
+  `TeX-parse-argument` insert it in braces instead of brackets.
 - Fill protection (`stex--in-notation-arg-p`, `stex--notation-arg-open-p`,
   added to buffer-local `fill-nobreak-predicate` from `stex--register-macros`)
   stops `M-q`/auto-fill from reflowing `\notation`'s/`\notation*`'s/`\symdef`'s
