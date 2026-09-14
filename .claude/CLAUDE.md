@@ -50,16 +50,14 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   block or fail the build itself. See `stex--handle-build-request-result`.
 - MathHub browsing (`stex-mathhub-open-file`, `stex-mathhub-insert-usemodule`)
   is **local archives only** — no remote-server merge/install (`flams.ts`'s
-  dual local+remote tree in `mathhub.ts`) and no fuzzy module search (that's
-  flams's own web UI loaded in a webview iframe in the vscode extension, not
-  a documented REST endpoint — nothing to port without embedding a browser).
-  It talks to three plain HTTP `POST` JSON endpoints on the server's HTTP
-  URL (`api/settings`, `api/backend/group_entries`,
-  `api/backend/archive_entries`, all mirrored from `flams.ts`/`mathhub.ts`)
-  via a small synchronous client (`stex--http-post`, built on `url.el` +
-  `json-parse-string`, no external dependency). Navigation is a
-  `completing-read`-based drill-down (`stex--drill-down`) rather than a
-  tree-sidebar widget — deliberately simpler than `MathHubTreeProvider`,
+  dual local+remote tree in `mathhub.ts`). It talks to plain HTTP `POST`
+  JSON endpoints on the server's HTTP URL (`api/settings`,
+  `api/backend/group_entries`, `api/backend/archive_entries`, all mirrored
+  from `flams.ts`/`mathhub.ts`) via a small synchronous client
+  (`stex--http-post`, built on `url.el` + `json-parse-string`, no external
+  dependency). Navigation is a `completing-read`-based drill-down
+  (`stex--drill-down`) rather than a tree-sidebar widget — deliberately
+  simpler than `MathHubTreeProvider`,
   works with whatever completion UI is already configured (vertico, etc.).
   `\usemodule` insertion (`stex--insert-usemodule`) is a direct port of
   `insertUsemodule` in `vscode/src/ts/utils.ts`, including its exact
@@ -139,6 +137,34 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   unconditional `.then(() => DASHBOARD.show(...))`); `stex-build-dashboard`
   opens the general dashboard page on demand. Same `browse-url`, no-in-
   Emacs-webview tradeoff as `stex-preview-browser`.
+- Fuzzy symbol search (`stex-mathhub-search-symbols`) — unlike the build
+  dashboard/preview, this one *isn't* a browser-URL tradeoff: the VS Code
+  extension's search webview (an iframe onto `<http-url>/vscode/search`,
+  registered as the `flams-search` view in `commands.ts`) turned out to
+  front a real, plain HTTP endpoint after all — `POST api/search_symbols`,
+  a Leptos `#[server(prefix = "/api", endpoint = "search_symbols")]`
+  function in `source/router/search/src/lib.rs` in the FLAMS repository
+  (found by grepping the FLAMS source tree for "search", not by reading
+  the vscode extension — the vscode-side code only shows the iframe URL,
+  not what that page itself calls). Same wire mechanism as
+  `api/backend/group_entries` &c. (confirmed: identical `#[server(prefix
+  = ..., endpoint = ...)]` macro, so the existing `stex--http-post`
+  client needed no changes), taking `query`/`num_results` and returning
+  `(score, SymbolUri, DocumentElementUri)` triples ranked by FLAMS's own
+  index across the *whole* MathHub. `SymbolUri` serializes as its
+  `Display` string (`<base>?a=<archive>&p=<path>&m=<module>&s=<symbol>`,
+  `p=` omitted when the module's file and name coincide — confirmed by
+  reading `ftml_uris`'s `Display` impls for `ArchiveUri`/`PathUri`/
+  `ModuleUri`/`SymbolUri` directly), parsed back out by
+  `stex--symbol-uri-component`. `stex--search-symbols-collection` wraps
+  this in `completion-table-dynamic` for real incremental fuzzy search in
+  `completing-read` (re-querying flams on every keystroke, 2-character
+  floor to avoid firing on the first keystroke) rather than embedding a
+  browser; picking a result inserts a `\usemodule` via the same
+  `stex--insert-usemodule` the drill-down commands use. This was
+  previously (wrongly) documented elsewhere in this file as "not a
+  documented REST endpoint" — that was true only of what the vscode
+  extension's own source reveals, not of FLAMS's full source tree.
 - Not implemented: remote MathHub browsing/install, HTML/quiz preview
   panes, the fuzzy module-search UI, call-hierarchy view,
   `vscode://flams/open`-equivalent URI handling. These map to the remote-

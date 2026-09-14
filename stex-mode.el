@@ -445,6 +445,7 @@ otherwise put them."
     (define-key prefix "p" #'stex-preview-browser)
     (define-key prefix "o" #'stex-mathhub-open-file)
     (define-key prefix "u" #'stex-mathhub-insert-usemodule)
+    (define-key prefix "s" #'stex-mathhub-search-symbols)
     (define-key prefix "t" #'stex-mathhub-tree)
     (define-key prefix "a" #'stex-mathhub-new-archive)
     (define-key prefix "U" #'stex-mathhub-update)
@@ -468,6 +469,9 @@ using it).
 \\[stex-preview-browser]  `stex-preview-browser'
 \\[stex-mathhub-open-file]  `stex-mathhub-open-file'
 \\[stex-mathhub-insert-usemodule]  `stex-mathhub-insert-usemodule'
+\\[stex-mathhub-search-symbols]  `stex-mathhub-search-symbols' -- fuzzy,
+  incremental search over FLAMS's whole indexed MathHub (not just
+  local drill-down), inserts a \\usemodule for the symbol you pick
 \\[stex-mathhub-tree]  `stex-mathhub-tree'
 \\[stex-mathhub-new-archive]  `stex-mathhub-new-archive'
 \\[stex-mathhub-update]  `stex-mathhub-update' -- git-pull every local
@@ -1324,6 +1328,110 @@ command was called from."
          (rel-path (stex--choose-file archive))
          (module-path (string-remove-suffix ".tex" rel-path)))
     (stex--insert-usemodule buffer archive module-path)))
+
+;;; Fuzzy symbol search
+
+;; The VS Code extension's "fuzzy module search" is a webview iframe
+;; onto `flams''s own web UI at `<server-url>/vscode/search' -- not
+;; something to embed here (no in-Emacs browser). But that page turns
+;; out to be a thin frontend over a real, plain HTTP endpoint,
+;; `POST api/search_symbols' (a Leptos `#[server(prefix = "/api",
+;; endpoint = "search_symbols")]' function, source/router/search/src/lib.rs
+;; in the FLAMS repository -- same mechanism, and callable the same
+;; way over `stex--http-post', as `api/backend/group_entries' &c.
+;; already in use above), taking `query'/`num_results' and returning
+;; `(score, SymbolUri, DocumentElementUri)' triples ranked by FLAMS's
+;; own full-text/fuzzy index across the whole MathHub -- not just this
+;; buffer's declarations, unlike `stex--known-symbol-names'.
+;; `SymbolUri' serializes as its URI string, of the form
+;; `<base>?a=<archive>&p=<path>&m=<module>&s=<symbol>' (`p=' absent
+;; when the module's file and name coincide) -- see FLAMS's
+;; `ftml_uris' crate for the exact `Display' impls this mirrors.
+;;
+;; `stex-mathhub-search-symbols' turns that into real incremental
+;; fuzzy search in the minibuffer via `completion-table-dynamic'
+;; (re-querying FLAMS on every keystroke, same as any other search-
+;; backed `completing-read'), then inserts a \usemodule for whichever
+;; symbol's module you pick -- the same end result as the VS Code
+;; webview's search-then-click flow, just without an embedded browser
+;; in between.
+
+(defun stex--symbol-uri-component (key uri)
+  "Extract query-component KEY (e.g. \"a\", \"p\", \"m\", \"s\") from URI.
+URI is a flams symbol/module URI string of the form
+\"<base>?a=<archive>&p=<path>&m=<module>&s=<symbol>\" (\"p=\" is
+optional).  Return nil if KEY isn't present."
+  (when (string-match (concat "[?&]" (regexp-quote key) "=\\([^&]*\\)") uri)
+    (match-string 1 uri)))
+
+(defun stex--symbol-uri-usemodule-arg (uri)
+  "Return (ARCHIVE . MODULE-PATH) for `stex--insert-usemodule', from URI.
+MODULE-PATH is \"path?module\" when URI has a \"p=\" component (the
+file the module lives in differs from the module's own name), or just
+the module name when it doesn't -- mirroring how `\\usemodule' itself
+is written in both cases (STEX manual, section 7.1)."
+  (let ((archive (stex--symbol-uri-component "a" uri))
+        (path (stex--symbol-uri-component "p" uri))
+        (module (stex--symbol-uri-component "m" uri)))
+    (cons archive (if path (concat path "?" module) module))))
+
+(defun stex--symbol-uri-label (uri)
+  "Human-readable completion label for URI, for `stex-mathhub-search-symbols'."
+  (let ((archive (stex--symbol-uri-component "a" uri))
+        (symbol (stex--symbol-uri-component "s" uri))
+        (arg (cdr (stex--symbol-uri-usemodule-arg uri))))
+    (format "%s  --  %s[%s]" (or symbol "?") archive arg)))
+
+(defvar stex--search-symbols-last-results nil
+  "Alist of (LABEL . SYMBOL-URI-STRING) from the last search.
+Refreshed by `stex--search-symbols-collection'; read by
+`stex-mathhub-search-symbols' to recover the full URI for the label
+`completing-read' returns, since the label alone doesn't carry the
+archive/path/module apart again.")
+
+(defun stex--search-symbols-collection (base query)
+  "Query BASE's flams server for QUERY, return a list of labels.
+Also refreshes `stex--search-symbols-last-results'.  Meant to be
+wrapped in `completion-table-dynamic' -- see
+`stex-mathhub-search-symbols'.  Returns nil (rather than erroring, and
+without querying at all) for a QUERY under 2 characters, to avoid
+firing a request on every single keystroke of a fresh search."
+  (if (< (length query) 2)
+      nil
+    (let ((results (ignore-errors
+                      (stex--http-post base "api/search_symbols"
+                                        `(("query" . ,query)
+                                          ("num_results" . "30"))))))
+      (setq stex--search-symbols-last-results
+            (mapcar (lambda (r)
+                      (let ((uri (nth 1 r)))
+                        (cons (stex--symbol-uri-label uri) uri)))
+                    results))
+      (mapcar #'car stex--search-symbols-last-results))))
+
+;;;###autoload
+(defun stex-mathhub-search-symbols ()
+  "Fuzzy-search FLAMS's indexed symbols and insert a \\usemodule for one.
+Queries `api/search_symbols' anew on every keystroke (see
+`stex--search-symbols-collection'), ranked by FLAMS's own full-text
+index across the whole MathHub -- not limited to this buffer or its
+\\usemodule'd files, unlike the local completion `stex-mode' offers at
+`\\symref' &c.'s own symbol argument.  Each keystroke blocks briefly on
+an HTTP round-trip, same as every other MathHub-browsing command in
+this package; works with no `.tex' file open, same as those too (see
+`stex--mathhub-base-url')."
+  (interactive)
+  (let* ((target-buffer (current-buffer))
+         (base (stex--mathhub-base-url))
+         (label (completing-read
+                 "Search symbols (2+ chars): "
+                 (completion-table-dynamic
+                  (lambda (q) (stex--search-symbols-collection base q)))))
+         (uri (cdr (assoc label stex--search-symbols-last-results))))
+    (unless uri
+      (user-error "𝖥𝖫∀𝖬∫: no matching symbol chosen"))
+    (let ((arg (stex--symbol-uri-usemodule-arg uri)))
+      (stex--insert-usemodule target-buffer (car arg) (cdr arg)))))
 
 ;;;###autoload
 (defun stex-mathhub-new-archive ()

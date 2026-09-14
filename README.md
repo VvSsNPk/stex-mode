@@ -44,6 +44,7 @@ Enabling it in a buffer:
 | `C-c C-x p` | `stex-preview-browser`            | Build an HTML preview and open it in a browser |
 | `C-c C-x o` | `stex-mathhub-open-file`          | Drill down local MathHub archives, open a file |
 | `C-c C-x u` | `stex-mathhub-insert-usemodule`   | Drill down local MathHub archives, insert `\usemodule` |
+| `C-c C-x s` | `stex-mathhub-search-symbols`     | Fuzzy-search all indexed symbols, insert `\usemodule` |
 | `C-c C-x t` | `stex-mathhub-tree`               | Whole local MathHub as a persistent tree (side window) |
 | `C-c C-x a` | `stex-mathhub-new-archive`        | Create a new MathHub archive |
 | `C-c C-x U` | `stex-mathhub-update`             | `git pull` local archives (see scopes below) |
@@ -121,9 +122,19 @@ launch a standalone `flams` connection against `stex-mathhub-root` and
 wait for it (`stex-mathhub-connect-timeout`). There's no remote-archive
 browsing/install (installing an *existing* remote archive, that is --
 distinct from creating a brand new one, which is local-only and needs no
-remote server), and no fuzzy module search (that one's FLAMS's own web UI,
-not a documented REST endpoint -- nothing to reuse without embedding a
-browser).
+remote server).
+
+`stex-mathhub-search-symbols` is a real, incremental fuzzy search over
+every symbol FLAMS has indexed across your whole MathHub -- not just
+local drill-down, and not just this buffer's own declarations (that's
+the local completion above). The VS Code extension shows this as a
+webview iframe onto FLAMS's own search page; that page turns out to be
+a thin frontend over a plain HTTP endpoint (`POST api/search_symbols`),
+so `stex-mode` queries it directly instead, feeding the results into a
+real Emacs `completing-read` (via `completion-table-dynamic`, so it
+re-queries on every keystroke) rather than embedding a browser. Pick a
+result and it inserts a `\usemodule` for that symbol's module, same
+end result as the VS Code webview's search-then-click flow.
 
 ## Inserting sTeX environments
 
@@ -280,8 +291,8 @@ emacs -Q --batch -l checkdoc --eval '(checkdoc-file "stex-mode.el")'
 
 ## What's not implemented
 
-Remote MathHub browsing/archive installation, the fuzzy module-search UI,
-the quiz preview pane, and the interactive flams/stex download-and-install
+Remote MathHub browsing/archive installation, the quiz preview pane, and
+the interactive flams/stex download-and-install
 wizard that the VS Code extension offers (you're expected to have `flams`
 and sTeX installed already; `stex-mode` only checks and reports, it
 doesn't fetch anything for you). See `stex-mode.el`'s Commentary header and
