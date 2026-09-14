@@ -190,6 +190,32 @@ suppressed. Text outside these arguments (including `\symdecl`, which
 has no such argument at all, and `\definiendum`/`\definame`, whose text
 argument *is* prose) fills exactly as before.
 
+## Symbol-name completion
+
+`flams`'s own LSP `completion` request is a permanent stub as of this
+writing (confirmed by reading FLAMS's server source directly), so eglot
+has nothing to offer while typing a symbol name. `stex-mode` fills part
+of that gap locally: while point is inside the symbol argument of
+`\symref`/`\sr`/`\symname`/`\sn`/`\symuse`/`\definiendum`/`\definame`,
+it offers completion (via the standard `completion-at-point-functions`
+mechanism -- so it works with whatever completion UI you already use,
+`corfu`/`company`/the built-in one) drawn from:
+
+- every `\symdecl`/`\symdecl*`/`\textsymdecl`/`\symdef` declaration in
+  the current buffer;
+- the same, in any file the buffer references via a plain
+  `\usemodule{X}`/`\importmodule{X}` (no `[archive]` override) that
+  resolves to a sibling `X.tex`/`X.<lang>.tex` file -- resolving a
+  cross-archive `\usemodule[archive]{X}` would need a live MathHub
+  connection, which a completion function must never block on, so
+  those are skipped.
+
+This is a local, best-effort stand-in, not real semantic completion:
+it doesn't follow a used module's own imports transitively, and it
+doesn't honor an explicit `name=` override in a `\symdecl`'s options
+(both deliberately out of scope). See `stex--register-macros` and
+`stex--symbol-completion-at-point`.
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:

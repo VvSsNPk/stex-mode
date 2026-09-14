@@ -102,7 +102,33 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   `stex--notation-arg-open-p` walks backward from each open brace level in
   `(nth 9 (syntax-ppss))` (so a nested macro like `\comp{...}` inside the
   argument is still caught) checking for the known `{arg1}[options]{arg2}`
-  shape these macros were registered with.
+  shape these macros were registered with. `stex--skip-back-over-arg`/
+  `stex--macro-name-before-point` factor out the "walk back over one
+  optional `[...]`/mandatory `{...}` argument, then read the macro name"
+  primitive shared with symbol completion below.
+- Symbol completion (`stex--symbol-completion-at-point`, added to
+  buffer-local `completion-at-point-functions` from `stex--register-macros`)
+  is a local stand-in for real LSP completion, since FLAMS's `completion`
+  request is a confirmed permanent stub (see the completion investigation
+  earlier in this file's history — `impl_request!(!completion = Completion
+  => (None));` in `source/lsp/src/implementation.rs`). Mirrors the fill-
+  protection predicate's shape but for the macros' *first* mandatory
+  argument (`stex--symbol-arg-open-p`, sharing the same backward-walk
+  primitives) instead of the last: `\symref`/`\sr`/`\symname`/`\sn`/
+  `\symuse`/`\definiendum`/`\definame`. Candidates come from
+  `stex--known-symbol-names`, which scans the current buffer for
+  `\symdecl`/`\symdecl*`/`\textsymdecl`/`\symdef` declarations
+  (`stex--symdecl-names-in-current-buffer`) plus, best-effort, any file
+  referenced by a plain `\usemodule{X}`/`\importmodule{X}` (no
+  `[archive]`) that resolves to a sibling `X.tex`/`X.<lang>.tex`
+  (`stex--resolve-local-usemodule-files`) — deliberately *not*
+  `\usemodule[archive]{X}`, since resolving an archive needs a live
+  MathHub connection and a `completion-at-point-functions` entry must
+  never block on one. `:exclusive 'no` lets eglot's own (currently
+  empty) completion still be tried when this doesn't apply or doesn't
+  match. Not transitive (a used module's own imports aren't followed)
+  and doesn't honor a `\symdecl`'s `name=` override — both deliberate
+  scope cuts, not oversights.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP
