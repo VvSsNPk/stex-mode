@@ -199,11 +199,18 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   `stex--preview-relay-sse-clients` keyed by the `uri` each client is
   watching). `stex--handle-html-result` (the `flams/htmlResult` handler)
   always calls `stex--preview-relay-broadcast` first, pushing an SSE
-  `reload` event to whichever clients are watching that exact document —
-  independent of `stex-preview-auto-open`, since "refresh an already-open
-  tab" and "pop open a brand new one" are orthogonal concerns. The wrapper
-  page's own script does the VS-Code-style iframe-self-navigate trick on
-  receiving that event. `stex--preview-url-for` is the one new indirection
+  `reload` event to whichever clients are watching that exact document.
+  `stex--preview-relay-broadcast` returns the list of clients it actually
+  reached (nil if none), and `stex--handle-html-result` uses that to gate
+  `stex-preview-auto-open`: if a client was already open and just got
+  refreshed, it does *not* also open a new tab — real user-reported bug,
+  caught only once actually used against a live server (every unit-level
+  test up to that point stubbed the broadcast call and never noticed its
+  return value was semantically meaningful, not just fire-and-forget).
+  `stex-preview-auto-open` only gets to pop a new tab when *nothing* was
+  already open for that document. The wrapper page's own script does the
+  VS-Code-style iframe-self-navigate trick on receiving the reload event.
+  `stex--preview-url-for` is the one new indirection
   point both `stex-preview-browser` and `stex--handle-html-result` call
   instead of `stex--preview-url` directly, picking relay-wrapped vs. direct
   based on `stex-preview-live-reload`. Verified with real end-to-end HTTP

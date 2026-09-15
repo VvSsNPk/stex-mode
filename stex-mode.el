@@ -588,15 +588,25 @@ starts it via `stex--preview-relay-ensure' if it isn't running yet."
           (url-hexify-string base-url)
           (url-hexify-string doc-uri)))
 
+(defun stex--preview-relay-clients-for (doc-uri)
+  "Return the open relay client processes currently watching DOC-URI."
+  (seq-filter (lambda (proc)
+                (and (process-live-p proc)
+                     (equal (process-get proc 'stex-sse-uri) doc-uri)))
+              stex--preview-relay-sse-clients))
+
 (defun stex--preview-relay-broadcast (doc-uri)
   "Push an SSE `reload' event to every open relay client watching DOC-URI.
-A no-op if the relay was never started (nothing to reload) or if
-`stex-preview-live-reload' is nil."
+Return the list of clients it was sent to (nil if the relay was never
+started, if `stex-preview-live-reload' is nil, or if nothing is
+currently watching DOC-URI) -- callers use this to tell whether an
+already-open tab just got refreshed, as opposed to nothing being open
+for DOC-URI at all."
   (when stex-preview-live-reload
-    (dolist (proc stex--preview-relay-sse-clients)
-      (when (and (process-live-p proc)
-                 (equal (process-get proc 'stex-sse-uri) doc-uri))
-        (ignore-errors (process-send-string proc "data: reload\n\n"))))))
+    (let ((clients (stex--preview-relay-clients-for doc-uri)))
+      (dolist (proc clients)
+        (ignore-errors (process-send-string proc "data: reload\n\n")))
+      clients)))
 
 (defun stex--preview-url-for (base-url doc-uri)
   "Return the URL to `browse-url' for BASE-URL/DOC-URI.
@@ -610,15 +620,19 @@ reload) otherwise."
 (defun stex--handle-html-result (base-url doc-uri)
   "Given BASE-URL, react to a flams/htmlResult notice about DOC-URI.
 BASE-URL is the reporting server's HTTP base URL (nil if unknown);
-DOC-URI is the document whose HTML just got (re)built.  Always
-broadcasts to any already-open live-reload relay clients for DOC-URI
-first (see `stex--preview-relay-broadcast'), then opens a new browser
-tab per `stex-preview-auto-open', or just messages that a preview is
-ready via `stex-preview-browser'."
-  (stex--preview-relay-broadcast doc-uri)
-  (if (and base-url stex-preview-auto-open)
-      (browse-url (stex--preview-url-for base-url doc-uri))
-    (message "𝖥𝖫∀𝖬∫: HTML preview ready (M-x stex-preview-browser)")))
+DOC-URI is the document whose HTML just got (re)built.  Broadcasts to
+any already-open live-reload relay clients for DOC-URI first (see
+`stex--preview-relay-broadcast'); if that actually reached a client,
+stop there -- an already-open tab just refreshed itself, so there is
+nothing more to do, and `stex-preview-auto-open' popping a second, new
+tab on top of it would just be a duplicate.  Only when nothing was
+already open does `stex-preview-auto-open' get to open a new tab (or,
+if it's nil, `stex-mode' just messages that a preview is ready)."
+  (if (stex--preview-relay-broadcast doc-uri)
+      (message "𝖥𝖫∀𝖬∫: HTML preview refreshed")
+    (if (and base-url stex-preview-auto-open)
+        (browse-url (stex--preview-url-for base-url doc-uri))
+      (message "𝖥𝖫∀𝖬∫: HTML preview ready (M-x stex-preview-browser)"))))
 
 (cl-defmethod eglot-handle-notification
   ((server stex-eglot-server) (_method (eql flams/htmlResult)) &key url)
