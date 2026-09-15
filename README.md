@@ -264,6 +264,32 @@ a bare symbol-argument reference, and (correctly) excluding `\symdecl*`
 declarations, which explicitly don't generate a macro. See
 `stex--macro-name-completion-at-point`.
 
+## Live-reloading previews
+
+The VS Code extension refreshes an already-open preview webview in place
+via a trick specific to VS Code's own webview API (see the build-dashboard
+section above for the same idea applied there) -- and FLAMS's own preview
+page has no self-refresh wiring of its own to lean on instead (checked its
+source directly: no websocket/SSE tied to rebuilds). So instead,
+`stex-mode` runs its own tiny local relay: by default
+(`stex-preview-live-reload`, on unless you turn it off), `stex-preview-browser`
+and the automatic `flams/htmlResult` handling open a small wrapper page
+served by a `127.0.0.1`-only server `stex-mode` starts on demand, which
+iframes the real preview and holds open a Server-Sent-Events connection
+back to that relay. Whenever `flams` rebuilds the same document again, the
+relay pushes a reload event down that connection and the wrapper force-
+reloads its iframe -- so a preview tab already open in your browser updates
+itself, the same live-updating experience VS Code's embedded webview gets,
+without Emacs needing to control the browser at all (no `xwidgets`
+dependency, works with whatever browser `browse-url` opens).
+
+Set `stex-preview-live-reload` to nil to open FLAMS's preview URL directly
+instead -- no live reload, and no local server ever starts. See
+`stex--preview-relay-ensure` and the rest of that section in `stex-mode.el`
+for how the relay itself works (a hand-rolled two-route HTTP server, since
+pulling in a real web server package for `/preview` and `/events` would be
+disproportionate).
+
 ## Configuration
 
 `M-x customize-group RET stex RET`, or `setq`/`setopt` directly:
@@ -293,6 +319,9 @@ declarations, which explicitly don't generate a macro. See
   (default: on, matching the VS Code extension's own always-on behavior
   there; unlike `stex-preview-auto-open`, this is a direct response to
   your own explicit build command, not an unsolicited server push).
+- `stex-preview-live-reload` -- whether preview links route through the
+  local live-reload relay (default: on) instead of opening FLAMS's
+  preview URL directly (off); see [Live-reloading previews](#live-reloading-previews).
 
 ## Getting flams and sTeX
 

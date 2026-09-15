@@ -96,7 +96,12 @@
 ;; some document's HTML on its own schedule; by default `stex-mode'
 ;; just messages that a fresh preview is ready rather than popping a
 ;; browser tab uninvited -- see `stex-preview-auto-open' to change
-;; that.
+;; that.  Either way, the tab stays live: by default
+;; (`stex-preview-live-reload') preview links go through a small local
+;; relay `stex-mode' runs, so a preview tab you already have open
+;; force-reloads itself whenever `flams' rebuilds that document again
+;; -- the same live-updating experience the VS Code extension gets
+;; from its embedded webview, ported to a real external browser.
 ;;
 ;; See `stex-mode-map' for a `C-c C-x'-prefixed binding to every
 ;; command above.
@@ -235,6 +240,23 @@ default), `stex-mode' just messages that a preview is ready; run
 `stex-preview-browser' yourself to view it.  When non-nil, every such
 notification opens a browser tab, which can be surprising if it
 fires more often than you'd expect a browser popup."
+  :type 'boolean
+  :group 'stex)
+
+(defcustom stex-preview-live-reload t
+  "Whether preview links route through a local live-reload relay.
+When non-nil (the default), `stex-preview-browser' and the automatic
+`flams/htmlResult' handling open a small wrapper page served by a
+`127.0.0.1'-only relay `stex-mode' starts on demand (see
+`stex--preview-relay-ensure'), instead of FLAMS's preview URL
+directly.  The wrapper iframes the real content and force-reloads it
+whenever FLAMS rebuilds that same document, so a preview tab already
+open in your browser updates itself without a manual refresh -- the
+same trick the VS Code extension's embedded webview uses for itself,
+ported to a real external browser since Emacs has no webview of its
+own to lean on (`M-x xwidget-webkit-browse-url' isn't compiled into
+most Emacs builds).  Set to nil to open FLAMS's URL directly instead
+-- no live reload, and no local server ever starts."
   :type 'boolean
   :group 'stex)
 
@@ -388,14 +410,214 @@ MathHub browsing (`stex-mathhub-open-file' etc.) talks to this URL."
   "Build a browsable preview URL on BASE-URL for DOC-URI."
   (concat base-url "?uri=" (url-hexify-string doc-uri)))
 
+;;; Local live-reload relay for previews
+
+;; The VS Code extension refreshes an already-open preview webview in
+;; place via a two-part trick, both parts purely working around
+;; quirks of VS Code's own webview API (see commands.ts): (1)
+;; `webview.html = ""' then `webview.html = iframeHtml(...)' again,
+;; since VS Code's `Webview.html' setter is a silent no-op when
+;; assigned the exact same string it already holds; (2) the generated
+;; page itself does `iframe.contentWindow.location.href =
+;; iframe.src', forcing the iframe to actually re-navigate even though
+;; its `src' attribute looks unchanged.  Neither trick is available to
+;; a real external browser tab -- there's no webview API to defeat,
+;; and FLAMS's own preview page has no self-refresh wiring of its own
+;; (confirmed by reading its source: no websocket/SSE tied to
+;; rebuilds, just a static render).  So instead, `stex-mode' runs its
+;; own tiny local relay: `stex-preview-browser' and the automatic
+;; `flams/htmlResult' handling open a wrapper page *we* serve, which
+;; iframes FLAMS's real preview URL and holds open a Server-Sent-
+;; Events connection back to this relay; when `flams/htmlResult' fires
+;; again for the same document, the relay pushes a `reload' event down
+;; that connection, and the wrapper's own script does the VS-Code-
+;; style "re-navigate the iframe to its own src" trick in response.
+;; Net effect: a preview tab left open in any real browser updates
+;; itself, the same as VS Code's embedded one does, without Emacs
+;; needing to control the browser at all.
+;;
+;; The relay is a hand-rolled HTTP server (`make-network-process',
+;; `:host 'local' so only 127.0.0.1 can ever connect -- confirmed via
+;; `make-network-process's own docstring, not assumed) since pulling
+;; in a real web server package for two GET routes and SSE would be
+;; disproportionate.  It understands exactly two paths: `/preview'
+;; (serves the wrapper page) and `/events' (the SSE stream); anything
+;; else gets a 404.  Started lazily, the first time a preview is
+;; actually requested; never started at all if
+;; `stex-preview-live-reload' is nil.
+
+(defvar stex--preview-relay-process nil
+  "The relay's listening server process, or nil if not started.")
+
+(defvar stex--preview-relay-sse-clients nil
+  "List of open `/events' connection processes.
+Each has a `stex-sse-uri' process property (set in
+`stex--preview-relay-serve-events') recording which document URI it's
+watching, so `stex--preview-relay-broadcast' can target the right
+ones.  Pruned of dead processes as they disconnect, in
+`stex--preview-relay-sentinel'.")
+
+(defun stex--preview-relay-status-text (code)
+  "Reason phrase for HTTP status CODE, for the relay's own responses."
+  (pcase code (200 "OK") (400 "Bad Request") (404 "Not Found") (_ "Error")))
+
+(defun stex--preview-relay-respond (proc code content-type body)
+  "Send a complete, `Connection: close' HTTP response on PROC.
+CODE is a status code, CONTENT-TYPE a MIME type (charset=utf-8 is
+added automatically), BODY the response body (a string).  Closes PROC
+afterward -- every non-SSE response from this relay is one-shot."
+  (let ((body-bytes (encode-coding-string body 'utf-8)))
+    (process-send-string
+     proc
+     (concat (format "HTTP/1.1 %d %s\r\n" code (stex--preview-relay-status-text code))
+             (format "Content-Type: %s; charset=utf-8\r\n" content-type)
+             (format "Content-Length: %d\r\n" (length body-bytes))
+             "Connection: close\r\n\r\n"
+             body)))
+  (delete-process proc))
+
+(defun stex--preview-relay-parse-query (query-string)
+  "Parse QUERY-STRING (\"a=1&b=2\", possibly nil) into an alist.
+Each value is `url-unhex-string'd; a key with no `=' gets the empty
+string as its value."
+  (when query-string
+    (mapcar (lambda (kv)
+              (let ((eq (string-search "=" kv)))
+                (if eq
+                    (cons (substring kv 0 eq)
+                          (url-unhex-string (substring kv (1+ eq))))
+                  (cons kv ""))))
+            (split-string query-string "&" t))))
+
+(defun stex--preview-relay-wrapper-html (flams-url doc-uri)
+  "Return the wrapper page HTML iframing FLAMS-URL for DOC-URI.
+Live-reloads via an SSE subscription to `/events?uri=DOC-URI' on this
+same relay."
+  (format "<!DOCTYPE html>
+<html><head><meta charset=\"utf-8\"><title>sTeX preview</title></head>
+<body style=\"margin:0;padding:0;\">
+<iframe id=\"f\" src=\"%s\" style=\"border:none;width:100vw;height:100vh;\"></iframe>
+<script>
+var f = document.getElementById('f');
+var es = new EventSource('/events?uri=%s');
+es.onmessage = function (e) {
+  if (e.data === 'reload') {
+    f.contentWindow.location.href = f.src;
+  }
+};
+</script>
+</body></html>"
+          flams-url (url-hexify-string doc-uri)))
+
+(defun stex--preview-relay-serve-preview (proc query)
+  "Respond on PROC with the wrapper page for QUERY's `base'/`uri'."
+  (let ((base (cdr (assoc "base" query)))
+        (uri (cdr (assoc "uri" query))))
+    (if (not (and base uri))
+        (stex--preview-relay-respond proc 400 "text/plain" "Missing base/uri")
+      (stex--preview-relay-respond
+       proc 200 "text/html"
+       (stex--preview-relay-wrapper-html (stex--preview-url base uri) uri)))))
+
+(defun stex--preview-relay-serve-events (proc query)
+  "Upgrade PROC into an open SSE stream watching QUERY's `uri'.
+Registers PROC in `stex--preview-relay-sse-clients'; unlike
+`stex--preview-relay-respond', never closes PROC -- it stays open
+until the browser tab does, fed later by
+`stex--preview-relay-broadcast'."
+  (process-put proc 'stex-sse-uri (cdr (assoc "uri" query)))
+  (process-send-string
+   proc
+   (concat "HTTP/1.1 200 OK\r\n"
+           "Content-Type: text/event-stream\r\n"
+           "Cache-Control: no-cache\r\n"
+           "Connection: keep-alive\r\n\r\n"))
+  (push proc stex--preview-relay-sse-clients))
+
+(defun stex--preview-relay-dispatch (proc request-line)
+  "Route REQUEST-LINE (e.g. \"GET /preview?uri=... HTTP/1.1\") on PROC."
+  (if (not (string-match "\\`GET \\([^ ]+\\) HTTP/" request-line))
+      (stex--preview-relay-respond proc 400 "text/plain" "Bad Request")
+    (let* ((path-and-query (split-string (match-string 1 request-line) "?"))
+           (path (car path-and-query))
+           (query (stex--preview-relay-parse-query (cadr path-and-query))))
+      (cond
+       ((equal path "/preview") (stex--preview-relay-serve-preview proc query))
+       ((equal path "/events") (stex--preview-relay-serve-events proc query))
+       (t (stex--preview-relay-respond proc 404 "text/plain" "Not Found"))))))
+
+(defun stex--preview-relay-filter (proc chunk)
+  "Accumulate CHUNK on PROC, dispatching once a full request has arrived.
+\"Full\" means a blank line after the request line -- this relay never
+expects or looks for a body, since every request it serves is a
+bodyless GET."
+  (process-put proc 'stex-buf (concat (or (process-get proc 'stex-buf) "") chunk))
+  (let ((buf (process-get proc 'stex-buf)))
+    (when (string-match "\r\n\r\n" buf)
+      (stex--preview-relay-dispatch proc (car (split-string buf "\r\n"))))))
+
+(defun stex--preview-relay-sentinel (proc _event)
+  "Drop PROC from `stex--preview-relay-sse-clients' once it dies."
+  (unless (process-live-p proc)
+    (setq stex--preview-relay-sse-clients
+          (delq proc stex--preview-relay-sse-clients))))
+
+(defun stex--preview-relay-ensure ()
+  "Start the local live-reload relay if not already running.
+Return the port it's listening on (127.0.0.1 only)."
+  (unless (and stex--preview-relay-process
+               (process-live-p stex--preview-relay-process))
+    (setq stex--preview-relay-process
+          (make-network-process
+           :name "stex-preview-relay"
+           :service t
+           :server t
+           :family 'ipv4
+           :host 'local
+           :filter #'stex--preview-relay-filter
+           :sentinel #'stex--preview-relay-sentinel
+           :noquery t)))
+  (cadr (process-contact stex--preview-relay-process)))
+
+(defun stex--preview-relay-url (base-url doc-uri)
+  "Return the local relay's wrapper URL for BASE-URL/DOC-URI.
+Like `stex--preview-url', but through the local live-reload relay --
+starts it via `stex--preview-relay-ensure' if it isn't running yet."
+  (format "http://127.0.0.1:%d/preview?base=%s&uri=%s"
+          (stex--preview-relay-ensure)
+          (url-hexify-string base-url)
+          (url-hexify-string doc-uri)))
+
+(defun stex--preview-relay-broadcast (doc-uri)
+  "Push an SSE `reload' event to every open relay client watching DOC-URI.
+A no-op if the relay was never started (nothing to reload) or if
+`stex-preview-live-reload' is nil."
+  (when stex-preview-live-reload
+    (dolist (proc stex--preview-relay-sse-clients)
+      (when (and (process-live-p proc)
+                 (equal (process-get proc 'stex-sse-uri) doc-uri))
+        (ignore-errors (process-send-string proc "data: reload\n\n"))))))
+
+(defun stex--preview-url-for (base-url doc-uri)
+  "Return the URL to `browse-url' for BASE-URL/DOC-URI.
+`stex--preview-relay-url' if `stex-preview-live-reload' is non-nil
+\(the default), `stex--preview-url' (FLAMS's own URL, direct, no live
+reload) otherwise."
+  (if stex-preview-live-reload
+      (stex--preview-relay-url base-url doc-uri)
+    (stex--preview-url base-url doc-uri)))
+
 (defun stex--handle-html-result (base-url doc-uri)
   "Given BASE-URL, react to a flams/htmlResult notice about DOC-URI.
 BASE-URL is the reporting server's HTTP base URL (nil if unknown);
-DOC-URI is the document whose HTML just got (re)built.  Opens a
-browser per `stex-preview-auto-open', or just messages that a
-preview is ready via `stex-preview-browser'."
+DOC-URI is the document whose HTML just got (re)built.  Always
+broadcasts to any already-open live-reload relay clients for DOC-URI
+first (see `stex--preview-relay-broadcast'), then opens a new browser
+tab per `stex-preview-auto-open', or just messages that a preview is
+ready via `stex-preview-browser'."
+  (stex--preview-relay-broadcast doc-uri)
   (if (and base-url stex-preview-auto-open)
-      (browse-url (stex--preview-url base-url doc-uri))
+      (browse-url (stex--preview-url-for base-url doc-uri))
     (message "𝖥𝖫∀𝖬∫: HTML preview ready (M-x stex-preview-browser)")))
 
 (cl-defmethod eglot-handle-notification
@@ -1220,7 +1442,7 @@ For `stex-preview-browser'.  A named top-level function, not a
 closure -- see `stex--mathhub-tree-expand' for why, and how BASE gets
 bound in via `apply-partially' instead."
   (if (and (stringp result) (not (string-empty-p result)))
-      (browse-url (stex--preview-url base result))
+      (browse-url (stex--preview-url-for base result))
     (message "𝖥𝖫∀𝖬∫: no preview available; building may have failed")))
 
 ;;;###autoload

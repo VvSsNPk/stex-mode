@@ -180,6 +180,38 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   unconditional `.then(() => DASHBOARD.show(...))`); `stex-build-dashboard`
   opens the general dashboard page on demand. Same `browse-url`, no-in-
   Emacs-webview tradeoff as `stex-preview-browser`.
+- Live-reloading previews (`stex--preview-relay-*`, `stex-preview-live-reload`,
+  default on): VS Code refreshes an already-open preview webview in place via
+  a two-part trick that's purely working around quirks of *its own* webview
+  API (`commands.ts`): `webview.html = ""` then `= iframeHtml(...)` again,
+  since `Webview.html`'s setter no-ops on an unchanged string; and the
+  generated page does `iframe.contentWindow.location.href = iframe.src` to
+  force a real re-navigation even though `src` looks unchanged. Neither
+  trick applies to a real external browser tab — confirmed FLAMS's own
+  preview page has no self-refresh wiring either (no websocket/SSE tied to
+  rebuilds in its source) — so there's nothing server-side to lean on.
+  Instead `stex-mode` runs its own hand-rolled local HTTP server
+  (`make-network-process`, `:host 'local` — confirmed via its docstring
+  this binds 127.0.0.1-only, rejects all other clients) understanding two
+  routes: `/preview` (serves a wrapper page iframing FLAMS's real preview
+  URL, with a script opening an `EventSource` back to this same relay) and
+  `/events` (the SSE stream, kept open per client, tracked in
+  `stex--preview-relay-sse-clients` keyed by the `uri` each client is
+  watching). `stex--handle-html-result` (the `flams/htmlResult` handler)
+  always calls `stex--preview-relay-broadcast` first, pushing an SSE
+  `reload` event to whichever clients are watching that exact document —
+  independent of `stex-preview-auto-open`, since "refresh an already-open
+  tab" and "pop open a brand new one" are orthogonal concerns. The wrapper
+  page's own script does the VS-Code-style iframe-self-navigate trick on
+  receiving that event. `stex--preview-url-for` is the one new indirection
+  point both `stex-preview-browser` and `stex--handle-html-result` call
+  instead of `stex--preview-url` directly, picking relay-wrapped vs. direct
+  based on `stex-preview-live-reload`. Verified with real end-to-end HTTP
+  requests against the actual running relay (not just mocked) — a real GET
+  `/preview`, a real SSE `/events` connection read via `open-network-stream`,
+  a real broadcast-and-receive round trip, and confirming per-uri targeting
+  (a broadcast for a different document's uri does *not* reach a client
+  watching another) and client-list pruning on disconnect.
 - Fuzzy symbol search (`stex-mathhub-search-symbols`) — unlike the build
   dashboard/preview, this one *isn't* a browser-URL tradeoff: the VS Code
   extension's search webview (an iframe onto `<http-url>/vscode/search`,
