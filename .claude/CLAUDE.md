@@ -226,19 +226,54 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   back off if it was the one that turned it on — mirrors the "give it
   back the way you found it" shape of the `eglot-server-programs`
   save/restore elsewhere in this file, but for a real toggleable mode
-  rather than a variable `kill-local-variable` can just discard. The
-  appended alist entries themselves are *not* undone on disable — same
-  harmless-leftover caveat as `stex--register-environments`/
-  `stex--register-macros` (an sTeX macro string simply won't occur in a
-  non-sTeX buffer to match against). Verified end-to-end against a real
-  `(LaTeX-mode)` buffer with actual text (not just the alist entries in
-  isolation): inserted `\importmodule[...]{...}`, `\symdecl{...}[...]`,
-  `\alpha + \beta`, ran `font-lock-ensure`, and read back each character's
-  `composition` text property directly, confirming `\importmodule`
-  composes to U+21D2 (⇒), `\symdecl` to U+25C6 (◆), and AUCTeX's own
-  `\alpha`/`\beta` entries still compose correctly to α/β alongside them
-  — not just that the alist *contains* the right pairs, that
-  `prettify-symbols-mode`'s actual rendering machinery picks them up.
+  rather than a variable `kill-local-variable` can just discard. Verified
+  end-to-end against a real `(LaTeX-mode)` buffer with actual text (not
+  just the alist entries in isolation): inserted `\importmodule[...]{...}`,
+  `\symdecl{...}[...]`, `\alpha + \beta`, ran `font-lock-ensure`, and read
+  back each character's `composition` text property directly, confirming
+  `\importmodule` composes to U+21D2 (⇒), `\symdecl` to U+25C6 (◆), and
+  AUCTeX's own `\alpha`/`\beta` entries still compose correctly to α/β
+  alongside them — not just that the alist *contains* the right pairs,
+  that `prettify-symbols-mode`'s actual rendering machinery picks them up.
+- Live prettification toggle (`stex-toggle-prettify-symbols`,
+  `C-c C-x P`): follow-up to the above — user wanted `prettify-symbols-mode`
+  itself always on (so plain LaTeX math like `\alpha` stays prettified
+  unconditionally) with the sTeX-specific glyphs as a separate switch
+  flippable at any time, not just at `stex-mode` enable time. Required
+  decoupling what was originally one on/off decision
+  (`stex-prettify-symbols` gating both "turn on `prettify-symbols-mode`"
+  and "append the sTeX alist") into two: `stex--register-prettify-symbols`
+  now turns on `prettify-symbols-mode` unconditionally, and
+  `stex-prettify-symbols` only controls whether `stex-prettify-symbols-alist`
+  starts appended. `stex-toggle-prettify-symbols` appends/removes that
+  same alist (`seq-difference` with an `equal` test to remove exactly
+  what was appended, since the buffer's `prettify-symbols-alist` also
+  contains AUCTeX's unrelated entries mixed in) and makes
+  `stex-prettify-symbols` buffer-local so the choice persists — including
+  across disabling and re-enabling `stex-mode` in that buffer, not reset
+  to the customized default each time. Real correctness issue caught
+  before shipping, not just assumed: `prettify-symbols-mode` doesn't
+  re-scan `prettify-symbols-alist` once a buffer is already fontified
+  (documented in its own docstring, and the same restart caveat already
+  known from `TeX-fold-macro-spec-list` elsewhere in this file) — so the
+  toggle command has to restart the mode (`stex--prettify-symbols-refresh`,
+  off then on) for a change to actually render, not just mutate the
+  variable. Now that there's a live way to remove the appended entries,
+  `stex-mode`'s disable body also does so before killing local state
+  (superseding the earlier "leftover entries are harmless, no forget API"
+  reasoning that applied when disable was the only exit path — with a
+  proper toggle in hand there's no reason to leave stale entries behind
+  anymore). Verified with four scenarios against real `(LaTeX-mode)`
+  buffers: default state has sTeX glyphs from the start;
+  `stex-prettify-symbols` `nil` globally still turns on
+  `prettify-symbols-mode` for AUCTeX's own math symbols while leaving
+  sTeX macros literal, exactly what was asked for, and the toggle then
+  turns sTeX glyphs on live without disturbing `\alpha`'s own entry;
+  toggling off and back on round-trips correctly; and the disable-body
+  cleanup restores the buffer's `prettify-symbols-alist` to exactly its
+  pre-registration length (626, i.e. AUCTeX's own count) while correctly
+  leaving a pre-existing user-enabled `prettify-symbols-mode` running
+  afterward rather than switching it off.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP

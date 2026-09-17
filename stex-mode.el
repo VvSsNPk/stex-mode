@@ -702,6 +702,7 @@ otherwise put them."
     (define-key prefix "U" #'stex-mathhub-update)
     (define-key prefix "h" #'stex-show-call-hierarchy)
     (define-key prefix "i" #'imenu)
+    (define-key prefix "P" #'stex-toggle-prettify-symbols)
     (define-key map (kbd "C-c C-x") prefix)
     map)
   "Keymap for `stex-mode', with everything under one prefix.
@@ -737,7 +738,9 @@ using it).
   own `eglot-show-call-hierarchy'; requires flams to advertise
   :callHierarchyProvider)
 \\[imenu]  `imenu' (built into Emacs; eglot wires it to flams's
-  documentSymbol support automatically, nothing to bind ourselves)")
+  documentSymbol support automatically, nothing to bind ourselves)
+\\[stex-toggle-prettify-symbols]  `stex-toggle-prettify-symbols' --
+  live on/off for sTeX macro glyphs, see `stex-prettify-symbols'")
 
 ;;; sTeX environment insertion (AUCTeX `C-c C-e' integration)
 
@@ -1047,15 +1050,26 @@ toggled off and back on."
 ;; macro *does* -- declares a symbol, defines its notation, references
 ;; one, imports a module, &c.), not derived from any FLAMS/vscode
 ;; source; customize `stex-prettify-symbols-alist' to change them.
+;;
+;; `prettify-symbols-mode' itself and the sTeX-specific extension are
+;; two independent knobs: `stex-mode' always turns the mode on, but
+;; whether `stex-prettify-symbols-alist' starts appended is controlled
+;; separately by `stex-prettify-symbols' -- and, unlike most of this
+;; package's other buffer-local registrations (`TeX-add-symbols' &c.,
+;; which have no "forget" API), this one can be toggled live at any
+;; time afterwards with `stex-toggle-prettify-symbols', without ever
+;; touching `prettify-symbols-mode' itself or AUCTeX's own standard-
+;; LaTeX-math entries.
 
 (defcustom stex-prettify-symbols t
-  "Whether enabling `stex-mode' also turns on `prettify-symbols-mode'.
-When non-nil (the default), `stex-mode' buffer-locally extends
-`prettify-symbols-alist' with `stex-prettify-symbols-alist' and turns
-on `prettify-symbols-mode' (off again when `stex-mode' is disabled,
-unless it was already on beforehand -- see `stex--register-prettify-symbols').
-Set to nil to leave `prettify-symbols-mode' and `prettify-symbols-alist'
-alone entirely."
+  "Whether sTeX's own macros start out prettified in a `stex-mode' buffer.
+`stex-mode' always turns on `prettify-symbols-mode' itself (see
+`stex--register-prettify-symbols'); this only controls whether
+`stex-prettify-symbols-alist' is appended to `prettify-symbols-alist'
+from the start.  Toggle it live in a given buffer with
+`stex-toggle-prettify-symbols' -- that command makes this
+buffer-local, so the choice sticks even across disabling and
+re-enabling `stex-mode' in that buffer."
   :type 'boolean
   :group 'stex)
 
@@ -1106,23 +1120,52 @@ Set by `stex--register-prettify-symbols'; read on `stex-mode' disable
 so a mode the user had already turned on themselves isn't switched
 back off underneath them.")
 
+(defun stex--prettify-symbols-refresh ()
+  "Restart `prettify-symbols-mode' to pick up a `prettify-symbols-alist' edit.
+Per its own docstring, a running `prettify-symbols-mode' doesn't
+re-scan `prettify-symbols-alist' on its own once it's already
+fontified a buffer -- toggling it off and back on is the standard fix,
+the same restart caveat `stex--register-fold' documents for
+`TeX-fold-macro-spec-list'.  A no-op if `prettify-symbols-mode' isn't
+even on."
+  (when prettify-symbols-mode
+    (prettify-symbols-mode -1)
+    (prettify-symbols-mode 1)))
+
 (defun stex--register-prettify-symbols ()
-  "Extend `prettify-symbols-alist' and turn on `prettify-symbols-mode'.
-A no-op if `stex-prettify-symbols' is nil.  Appends
+  "Turn on `prettify-symbols-mode', with sTeX glyphs if `stex-prettify-symbols'.
+Always turns on `prettify-symbols-mode' itself, independent of
+`stex-prettify-symbols' -- see the Commentary above
+`stex-prettify-symbols' for why those are two separate knobs.  Appends
 `stex-prettify-symbols-alist' rather than replacing
 `prettify-symbols-alist' outright, so AUCTeX's own standard-LaTeX-math
-entries (see the Commentary above `stex-prettify-symbols-alist') stay
-in effect too.  Leftover appended entries are not undone when
-`stex-mode' is disabled again -- same caveat as
-`stex--register-environments'/`stex--register-macros' (harmless: an
-sTeX macro simply isn't in a non-sTeX buffer's text to match against)
--- but `prettify-symbols-mode' itself is turned back off then, unless
-`stex--prettify-symbols-was-on' says it was already on beforehand."
+entries stay in effect too."
+  (setq stex--prettify-symbols-was-on prettify-symbols-mode)
   (when stex-prettify-symbols
-    (setq stex--prettify-symbols-was-on prettify-symbols-mode)
     (setq-local prettify-symbols-alist
-                (append stex-prettify-symbols-alist prettify-symbols-alist))
-    (prettify-symbols-mode 1)))
+                (append stex-prettify-symbols-alist prettify-symbols-alist)))
+  (prettify-symbols-mode 1))
+
+;;;###autoload
+(defun stex-toggle-prettify-symbols ()
+  "Toggle whether sTeX's own macros are prettified, live, in this buffer.
+Leaves `prettify-symbols-mode' itself, and AUCTeX's own standard-
+LaTeX-math entries in `prettify-symbols-alist', alone either way --
+only adds or removes `stex-prettify-symbols-alist' (via
+`stex--prettify-symbols-refresh' to make the change actually visible)
+and makes `stex-prettify-symbols' buffer-local so the new state
+sticks.  See the Commentary above `stex-prettify-symbols' for how
+`stex-mode' picks the starting state."
+  (interactive)
+  (setq-local prettify-symbols-alist
+              (if stex-prettify-symbols
+                  (seq-difference prettify-symbols-alist
+                                   stex-prettify-symbols-alist #'equal)
+                (append stex-prettify-symbols-alist prettify-symbols-alist)))
+  (setq-local stex-prettify-symbols (not stex-prettify-symbols))
+  (stex--prettify-symbols-refresh)
+  (message "𝖥𝖫∀𝖬∫: sTeX macro prettification %s"
+           (if stex-prettify-symbols "enabled" "disabled")))
 
 ;;; Local symbol-name completion
 
@@ -1385,11 +1428,13 @@ about sTeX macros like `\\symdecl', `\\notation' and `\\symref' (see
 `stex--register-macros'), and teaches `TeX-fold-mode' to fold
 `\\notation'/`\\symdef'/`\\textsymdecl' to a short label instead of
 AUCTeX's generic placeholder (see `stex--register-fold').  It also
-turns on `prettify-symbols-mode', extended with glyphs for sTeX's own
-macros on top of AUCTeX's standard LaTeX math symbols (see
-`stex-prettify-symbols'/`stex-prettify-symbols-alist'); set
-`stex-prettify-symbols' to nil to skip that.  See `stex-mode-map' for
-the full command list and its shared prefix."
+turns on `prettify-symbols-mode' (always, on top of whatever AUCTeX
+already put in `prettify-symbols-alist' for standard LaTeX math),
+starting with glyphs for sTeX's own macros too unless
+`stex-prettify-symbols' is nil; either way, `stex-toggle-prettify-symbols'
+flips just that sTeX-specific part live, any time, without touching
+`prettify-symbols-mode' itself.  See `stex-mode-map' for the full
+command list and its shared prefix."
   :lighter " sTeX"
   :keymap stex-mode-map
   (if stex-mode
@@ -1408,7 +1453,11 @@ the full command list and its shared prefix."
          (setq stex-mode nil)
          (signal (car err) (cdr err))))
     (kill-local-variable 'eglot-server-programs)
-    (when (and stex-prettify-symbols (not stex--prettify-symbols-was-on))
+    (when stex-prettify-symbols
+      (setq-local prettify-symbols-alist
+                  (seq-difference prettify-symbols-alist
+                                   stex-prettify-symbols-alist #'equal)))
+    (unless stex--prettify-symbols-was-on
       (prettify-symbols-mode -1))))
 
 ;;;###autoload

@@ -51,6 +51,7 @@ Enabling it in a buffer:
 | `C-c C-x U` | `stex-mathhub-update`             | `git pull` local archives (see scopes below) |
 | `C-c C-x h` | `stex-show-call-hierarchy`        | Call hierarchy for the symbol at point (side window) |
 | `C-c C-x i` | `imenu`                           | Jump to a symbol in the current file |
+| `C-c C-x P` | `stex-toggle-prettify-symbols`    | Toggle sTeX macro glyphs on/off, live |
 
 The VS Code extension shows build progress in a webview panel, which
 turns out to just be an `<iframe>` onto a page `flams` serves directly
@@ -300,18 +301,26 @@ AUCTeX already sets up `prettify-symbols-alist` for every `LaTeX-mode`
 buffer with the standard ~600-entry table of LaTeX math symbols (`\alpha`
 -> α, `\rightarrow` -> →, ...) that plain Emacs's own `tex-mode.el` ships
 -- it's just off by default (`prettify-symbols-mode` is a plain toggle).
-None of that table covers sTeX's own macros, though, so enabling
-`stex-mode` also turns on `prettify-symbols-mode` and extends that table
-with glyphs for `\importmodule`, `\symdecl`, `\symdef`, `\notation`,
-`\symref`, `\definiendum` and the rest of the macros `stex-mode` teaches
-`C-c C-m` about (see `stex-prettify-symbols-alist`) -- the buffer text is
-untouched, only how it's *displayed* changes, so nothing about editing,
-searching, or what gets sent to `flams` is affected. Set
-`stex-prettify-symbols` to nil to skip this entirely (leaves
-`prettify-symbols-mode`/`prettify-symbols-alist` alone), or customize
-`stex-prettify-symbols-alist` to change/add glyphs -- the choices there
-are this package's own curated picks, not something FLAMS or the VS Code
-extension define.
+None of that table covers sTeX's own macros, though, so `stex-mode`
+always turns on `prettify-symbols-mode` (on top of whatever standard
+LaTeX-math glyphs AUCTeX already set up) and, by default, also extends
+the table with glyphs for `\importmodule`, `\symdecl`, `\symdef`,
+`\notation`, `\symref`, `\definiendum` and the rest of the macros
+`stex-mode` teaches `C-c C-m` about (see `stex-prettify-symbols-alist`)
+-- the buffer text is untouched, only how it's *displayed* changes, so
+nothing about editing, searching, or what gets sent to `flams` is
+affected.
+
+`prettify-symbols-mode` itself and the sTeX-specific glyphs are two
+independent switches: `C-c C-x P` (`stex-toggle-prettify-symbols`) turns
+just the sTeX macros on or off live, in the current buffer, without ever
+touching `prettify-symbols-mode` or AUCTeX's own math symbols -- so you
+can have plain LaTeX math prettified while sTeX macros stay literal, or
+vice versa, and flip between them on the fly. `stex-prettify-symbols`
+sets the starting state (default: on); customize
+`stex-prettify-symbols-alist` to change/add the glyphs themselves -- the
+choices there are this package's own curated picks, not something FLAMS
+or the VS Code extension define.
 
 ## Live-reloading previews
 
@@ -374,9 +383,11 @@ disproportionate).
 - `stex-fold-notation-max-length` -- how many characters of a folded
   `\notation`/`\symdef` argument to show before truncating with an
   ellipsis (default: 40); see [Folding notation code](#folding-notation-code).
-- `stex-prettify-symbols` -- whether `stex-mode` turns on
-  `prettify-symbols-mode` and extends `prettify-symbols-alist` with sTeX
-  macro glyphs (default: on); see [Prettified macros](#prettified-macros).
+- `stex-prettify-symbols` -- whether sTeX macro glyphs start appended to
+  `prettify-symbols-alist` (default: on; `prettify-symbols-mode` itself
+  always turns on regardless); toggle live with `C-c C-x P`
+  (`stex-toggle-prettify-symbols`) instead of customizing this -- see
+  [Prettified macros](#prettified-macros).
 - `stex-prettify-symbols-alist` -- the sTeX macro -> glyph table itself,
   customize to change/add entries.
 
