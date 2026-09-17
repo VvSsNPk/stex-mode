@@ -4,12 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository state
 
-This repo holds two related pieces:
+This repo holds three related pieces:
 
 - **Root (`stex-mode.el`, `eldev`)** — an Emacs package that connects `latex-mode`/`LaTeX-mode` buffers to the `flams` LSP server via built-in `eglot`, mirroring a subset of the `vscode/` extension's command set (build/export, not the MathHub browser or previews — see the header Commentary in `stex-mode.el` for exact scope). `eldev` is just the vendored [Eldev](https://github.com/emacs-eldev/eldev) bootstrap shell script — there is no `Eldev` project file yet, so `./eldev test`/`./eldev lint` won't do anything meaningful until one is added. For now, verify with plain Emacs batch mode: `emacs -Q --batch -L . -f batch-byte-compile stex-mode.el` and `emacs -Q --batch -l checkdoc --eval '(checkdoc-file "stex-mode.el")'`.
 - **`vscode/`** — a working VS Code/VSCodium extension ("FLAMS", package name `flams`) for the FLAMS system and sTeX. This is the fuller-featured reference implementation (MathHub tree, HTML/quiz previews, call hierarchy, setup/installer wizard) that `stex-mode.el` is catching up to.
-
-There is no root README and no git repository initialized.
+- **`neovim/`** — a Neovim/Lua plugin, currently just a Telescope picker for fuzzy MathHub symbol search (a Lua port of `stex-mathhub-search-symbols`), not a full port of `stex-mode.el` — see `neovim/README.md` for exact scope and why the rest (AUCTeX-dependent features especially) doesn't translate mechanically.
 
 ## `stex-mode.el` — the Emacs package
 

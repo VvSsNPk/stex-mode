@@ -371,6 +371,9 @@ doesn't fetch anything for you). See `stex-mode.el`'s Commentary header and
 - `vscode/` -- FLAMS's VS Code/VSCodium extension, vendored here as the
   fuller-featured reference implementation `stex-mode.el` follows. Not an
   Emacs dependency; see `vscode/README.md`.
+- `neovim/` -- a Neovim/Lua counterpart, currently just a Telescope picker
+  for fuzzy MathHub symbol search (not a full port -- see `neovim/README.md`
+  for what that would take and why it isn't one).
 
 ## License
 
