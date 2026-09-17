@@ -169,6 +169,31 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   backslash from the replaced region (BEG is set *after* it), same
   convention as everywhere else in the file that reads a macro name, so
   candidates must be bare names.
+- Fold protection (`stex--register-fold`, `stex--fold-notation-display`)
+  teaches AUCTeX's `TeX-fold-mode` to fold `stex--notation-arg-macros`
+  (the same list `stex--in-notation-arg-p` protects from fill — the two
+  features are complementary, both keyed off "this argument is code, not
+  prose") to just their notation/output argument via
+  `TeX-fold-macro-spec-list`'s function-spec mechanism, instead of
+  AUCTeX's generic `[m]` placeholder. The spec's numeric-argument
+  indexing (confirmed by reading `TeX-fold-macro-nth-arg`'s source) only
+  counts *mandatory* `{...}` arguments, skipping over `[...]` optional
+  ones entirely — so `(1 . 2)` as the SIG and a 2-arg display function
+  `(name code &rest _)` correctly targets the code argument regardless
+  of the `[options]` in between, no different from how
+  `stex--notation-arg-open-p`/`stex--symbol-arg-open-p` already treat
+  optional groups as transparent for numbering purposes. Real bug
+  caught the first time this actually ran (not just compiled): guarding
+  registration with `(fboundp 'TeX-fold-mode)`, the same idiom used
+  elsewhere in this file, produced a `void-variable
+  TeX-fold-macro-spec-list` error — AUCTeX autoloads the *function*
+  `TeX-fold-mode` before `tex-fold.el` itself (and thus the variable)
+  has actually loaded, unlike the always-loaded `tex.el` that
+  `TeX-add-symbols`/`LaTeX-add-environments` live in, so `fboundp` alone
+  doesn't guarantee the variable exists yet. Fixed by guarding with
+  `(require 'tex-fold nil t)` instead, which both checks availability
+  and guarantees the file (and its variable) is actually loaded before
+  touching it.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP

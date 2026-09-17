@@ -135,13 +135,17 @@
 ;; `\symdecl'/`\textsymdecl'/`\symdef' also generates a same-named
 ;; semantic macro, so those same declarations additionally complete as
 ;; `\NAME' anywhere else in the buffer, not just inside those macros'
-;; own symbol argument.  See `stex--register-macros'.
+;; own symbol argument.  See `stex--register-macros'.  If AUCTeX's
+;; `TeX-fold-mode' is available, `stex-mode' also teaches it to fold
+;; `\notation'/`\notation*'/`\symdef'/`\textsymdecl' down to just their
+;; notation/output argument (see `stex--register-fold'), instead of
+;; AUCTeX's generic placeholder for unrecognized macros.
 ;;
-;; Not implemented (yet): the quiz preview pane, the fuzzy
-;; module-search UI, remote MathHub browsing and archive installation,
-;; and the interactive flams/stex download-and-install wizard that the
-;; VS Code extension offers.  Install those tools yourself and point
-;; `stex-flams-executable' at the binary.
+;; Not implemented (yet): the quiz preview pane, remote MathHub
+;; browsing and archive installation, and the interactive flams/stex
+;; download-and-install wizard that the VS Code extension offers.
+;; Install those tools yourself and point `stex-flams-executable' at
+;; the binary.
 
 ;;; Code:
 
@@ -958,6 +962,66 @@ ordinary LaTeX with real macros in it), this only ever suppresses
 line-fill breaks."
   (cl-some #'stex--notation-arg-open-p (nth 9 (syntax-ppss))))
 
+;;; Folding notation/output code (AUCTeX `TeX-fold-mode' integration)
+
+;; The same `stex--notation-arg-macros' this section protects from
+;; fill also make good folding candidates: a `\notation'/`\symdef'
+;; definition can run long, and once written, the interesting part to
+;; see at a glance while editing surrounding text is usually the
+;; notation itself, not the whole `\notation{sym}[prec=...]{...}'
+;; wrapper.  `TeX-fold-mode' (AUCTeX's own construct-folding minor
+;; mode, `C-c C-o C-b'/`C-c C-o C-m' &c.) already does exactly this
+;; kind of thing for stock macros like `\section'/`\emph' via
+;; `TeX-fold-macro-spec-list'; this just adds an entry for ours.
+
+(defcustom stex-fold-notation-max-length 40
+  "Maximum length of a folded notation/output argument's display.
+Applies to `\\notation'/`\\notation*'/`\\symdef'/`\\textsymdecl' under
+`TeX-fold-mode' -- see `stex--fold-notation-display'.  Longer than
+this, the display is truncated with an ellipsis; the buffer text
+itself is never touched, only what folding displays in its place."
+  :type 'integer
+  :group 'stex)
+
+(defun stex--fold-notation-display (_name code &rest _args)
+  "`TeX-fold-macro-spec-list' display function for `stex--notation-arg-macros'.
+Called by `TeX-fold-mode' with each macro's mandatory arguments; for
+these macros that's `(mname code)', per the `{arg1}[options]{arg2}'
+shape they were registered with in `stex--register-macros' -- _NAME is
+ignored, CODE (the notation/output argument, the same one
+`stex--in-notation-arg-p' protects from fill) is what gets shown,
+whitespace-collapsed onto one line and truncated to
+`stex-fold-notation-max-length' with an ellipsis if longer."
+  (let ((flat (string-trim (replace-regexp-in-string "[ \t\n]+" " " code))))
+    (if (> (length flat) stex-fold-notation-max-length)
+        (concat (substring flat 0 stex-fold-notation-max-length) "…")
+      flat)))
+
+(defun stex--register-fold ()
+  "Teach AUCTeX's `TeX-fold-mode' to fold `stex--notation-arg-macros'.
+Displays each one's notation/output argument via
+`stex--fold-notation-display' instead of AUCTeX's generic \"[m]\"
+placeholder.  A no-op unless `tex-fold' is available to load -- note
+this is `(require \\='tex-fold nil t)', not an `fboundp' check on
+`TeX-fold-mode' like the guards elsewhere in this file use: AUCTeX
+autoloads that *function* even before `tex-fold.el' itself has
+loaded, but `TeX-fold-macro-spec-list' (a plain variable, not
+autoloaded) stays void until it actually has -- confirmed the hard
+way, `fboundp'-guarding this the same way broke with a real
+`void-variable' error the first time this ran without `tex-fold'
+already loaded some other way.  Adds to the *current buffer's*
+`TeX-fold-macro-spec-list' only, same caveats as
+`stex--register-environments': no \"forget\" API to undo this when
+`stex-mode' is disabled again, and -- specific to this variable, per
+its own docstring -- `TeX-fold-mode' must be (re)started for a change
+to it to actually take effect, so a `TeX-fold-mode' already turned on
+in this buffer before `stex-mode' enables won't see this until
+toggled off and back on."
+  (when (require 'tex-fold nil t)
+    (add-to-list (make-local-variable 'TeX-fold-macro-spec-list)
+                 (list (cons #'stex--fold-notation-display '(1 . 2))
+                       stex--notation-arg-macros))))
+
 ;;; Local symbol-name completion
 
 ;; FLAMS's own `completion' LSP request is a permanent stub as of this
@@ -1216,8 +1280,10 @@ AUCTeX's `LaTeX-environment' command about sTeX environments like
 `smodule', `sparagraph' and `sdefinition' (see
 `stex--register-environments') and its `TeX-insert-macro' command
 about sTeX macros like `\\symdecl', `\\notation' and `\\symref' (see
-`stex--register-macros').  See `stex-mode-map' for the full command
-list and its shared prefix."
+`stex--register-macros'), and teaches `TeX-fold-mode' to fold
+`\\notation'/`\\symdef'/`\\textsymdecl' to a short label instead of
+AUCTeX's generic placeholder (see `stex--register-fold').  See
+`stex-mode-map' for the full command list and its shared prefix."
   :lighter " sTeX"
   :keymap stex-mode-map
   (if stex-mode
@@ -1229,6 +1295,7 @@ list and its shared prefix."
                               eglot-server-programs))
             (stex--register-environments)
             (stex--register-macros)
+            (stex--register-fold)
             (eglot-ensure))
         (error
          (setq stex-mode nil)

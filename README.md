@@ -264,6 +264,24 @@ a bare symbol-argument reference, and (correctly) excluding `\symdecl*`
 declarations, which explicitly don't generate a macro. See
 `stex--macro-name-completion-at-point`.
 
+## Folding notation code
+
+`\notation`/`\notation*`/`\symdef`/`\textsymdecl` definitions can run
+long, and once written, the interesting part to see while editing
+surrounding text is usually the notation itself, not the whole
+`\notation{sym}[prec=...]{...}` wrapper. If AUCTeX's own `TeX-fold-mode`
+is available, `stex-mode` teaches it to fold these down to just their
+notation/output argument (whitespace-collapsed onto one line, truncated
+with an ellipsis past `stex-fold-notation-max-length` characters)
+instead of AUCTeX's generic `[m]` placeholder for an unrecognized macro
+-- the same folding mechanism AUCTeX already uses for e.g. `\section`/
+`\emph` (`C-c C-o C-b` to fold the whole buffer, `C-c C-o C-o` to
+unfold at point, etc. -- see AUCTeX's own manual for the full `TeX-fold`
+keymap). Note AUCTeX's own caveat applies here too: if `TeX-fold-mode`
+was already on in a buffer before `stex-mode` enabled, it needs to be
+toggled off and back on for this to take effect, since
+`TeX-fold-macro-spec-list` changes aren't picked up live.
+
 ## Live-reloading previews
 
 The VS Code extension refreshes an already-open preview webview in place
@@ -322,6 +340,9 @@ disproportionate).
 - `stex-preview-live-reload` -- whether preview links route through the
   local live-reload relay (default: on) instead of opening FLAMS's
   preview URL directly (off); see [Live-reloading previews](#live-reloading-previews).
+- `stex-fold-notation-max-length` -- how many characters of a folded
+  `\notation`/`\symdef` argument to show before truncating with an
+  ellipsis (default: 40); see [Folding notation code](#folding-notation-code).
 
 ## Getting flams and sTeX
 
