@@ -294,6 +294,25 @@ was already on in a buffer before `stex-mode` enabled, it needs to be
 toggled off and back on for this to take effect, since
 `TeX-fold-macro-spec-list` changes aren't picked up live.
 
+## Prettified macros
+
+AUCTeX already sets up `prettify-symbols-alist` for every `LaTeX-mode`
+buffer with the standard ~600-entry table of LaTeX math symbols (`\alpha`
+-> α, `\rightarrow` -> →, ...) that plain Emacs's own `tex-mode.el` ships
+-- it's just off by default (`prettify-symbols-mode` is a plain toggle).
+None of that table covers sTeX's own macros, though, so enabling
+`stex-mode` also turns on `prettify-symbols-mode` and extends that table
+with glyphs for `\importmodule`, `\symdecl`, `\symdef`, `\notation`,
+`\symref`, `\definiendum` and the rest of the macros `stex-mode` teaches
+`C-c C-m` about (see `stex-prettify-symbols-alist`) -- the buffer text is
+untouched, only how it's *displayed* changes, so nothing about editing,
+searching, or what gets sent to `flams` is affected. Set
+`stex-prettify-symbols` to nil to skip this entirely (leaves
+`prettify-symbols-mode`/`prettify-symbols-alist` alone), or customize
+`stex-prettify-symbols-alist` to change/add glyphs -- the choices there
+are this package's own curated picks, not something FLAMS or the VS Code
+extension define.
+
 ## Live-reloading previews
 
 The VS Code extension refreshes an already-open preview webview in place
@@ -355,6 +374,11 @@ disproportionate).
 - `stex-fold-notation-max-length` -- how many characters of a folded
   `\notation`/`\symdef` argument to show before truncating with an
   ellipsis (default: 40); see [Folding notation code](#folding-notation-code).
+- `stex-prettify-symbols` -- whether `stex-mode` turns on
+  `prettify-symbols-mode` and extends `prettify-symbols-alist` with sTeX
+  macro glyphs (default: on); see [Prettified macros](#prettified-macros).
+- `stex-prettify-symbols-alist` -- the sTeX macro -> glyph table itself,
+  customize to change/add entries.
 
 ## Getting flams and sTeX
 

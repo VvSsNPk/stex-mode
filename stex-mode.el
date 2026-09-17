@@ -1027,6 +1027,103 @@ toggled off and back on."
                  (list (cons #'stex--fold-notation-display '(1 . 2))
                        stex--notation-arg-macros))))
 
+;;; sTeX macro prettification (prettify-symbols-mode)
+
+;; AUCTeX already sets up `prettify-symbols-alist' for every
+;; `LaTeX-mode'/`TeX-mode' buffer -- `TeX-common-initialization' in
+;; tex.el does `(setq-local prettify-symbols-alist
+;; tex--prettify-symbols-alist)', the same ~600-entry table of
+;; standard LaTeX math macros (`\alpha', `\rightarrow', `\forall', &c.)
+;; that plain Emacs's own tex-mode.el ships -- it just isn't turned on
+;; by default (`prettify-symbols-mode' is a plain toggle, `M-x
+;; prettify-symbols-mode' or a `LaTeX-mode-hook' entry). None of that
+;; table's entries are sTeX-specific, though: `\importmodule',
+;; `\symdecl', `\symdef' and the rest of this package's own macros
+;; (`stex--register-macros') look exactly as typed, backslash and all.
+;; `stex-prettify-symbols-alist' below extends (never replaces) that
+;; existing table with entries for those, so `prettify-symbols-mode'
+;; renders them as compact glyphs too, same mechanism. The glyph
+;; choices are this package's own curated picks (grouped by what the
+;; macro *does* -- declares a symbol, defines its notation, references
+;; one, imports a module, &c.), not derived from any FLAMS/vscode
+;; source; customize `stex-prettify-symbols-alist' to change them.
+
+(defcustom stex-prettify-symbols t
+  "Whether enabling `stex-mode' also turns on `prettify-symbols-mode'.
+When non-nil (the default), `stex-mode' buffer-locally extends
+`prettify-symbols-alist' with `stex-prettify-symbols-alist' and turns
+on `prettify-symbols-mode' (off again when `stex-mode' is disabled,
+unless it was already on beforehand -- see `stex--register-prettify-symbols').
+Set to nil to leave `prettify-symbols-mode' and `prettify-symbols-alist'
+alone entirely."
+  :type 'boolean
+  :group 'stex)
+
+(defcustom stex-prettify-symbols-alist
+  '(;; Module system: import (and re-export), use (no re-export),
+    ;; require as a build dependency.
+    ("\\importmodule" . ?⇒)
+    ("\\usemodule" . ?→)
+    ("\\requiremodule" . ?↠)
+    ;; Declares a new symbol.  Starred/textual variants get a hollow
+    ;; or alternate diamond, matching "still declares, slightly
+    ;; different shape" rather than an unrelated glyph.
+    ("\\symdecl" . ?◆)
+    ("\\symdecl*" . ?◇)
+    ("\\textsymdecl" . ?⬧)
+    ;; Defines a symbol's (or variable's) usable notation.
+    ("\\symdef" . ?✎)
+    ("\\vardef" . ?✐)
+    ;; Defines notation for an already-declared symbol/variable.
+    ("\\notation" . ?❖)
+    ("\\notation*" . ?◈)
+    ("\\varnotation" . ?◈)
+    ("\\defnotation" . ?❖)
+    ;; References an existing symbol/variable by name.
+    ("\\symref" . ?↪)
+    ("\\varref" . ?↩)
+    ;; Marks text as defining a term.
+    ("\\definiendum" . ?‣)
+    ("\\definame" . ?‣)
+    ("\\Definame" . ?‣)
+    ;; Splices another file's content in by reference.
+    ("\\inputref" . ?↴)
+    ("\\mhinput" . ?↴)
+    ;; Cross-references to a labeled spot, in- or out-of-document.
+    ("\\sref" . ?§)
+    ("\\extref" . ?⇗))
+  "Alist of (MACRO-STRING . CHARACTER) added to `prettify-symbols-alist'.
+See the Commentary above this variable's definition for how it's used
+and where the glyph choices come from.  Each entry follows
+`prettify-symbols-alist''s own format, so it can be edited/extended
+the same way."
+  :type '(alist :key-type string :value-type character)
+  :group 'stex)
+
+(defvar-local stex--prettify-symbols-was-on nil
+  "Whether `prettify-symbols-mode' was already on before `stex-mode' enabled.
+Set by `stex--register-prettify-symbols'; read on `stex-mode' disable
+so a mode the user had already turned on themselves isn't switched
+back off underneath them.")
+
+(defun stex--register-prettify-symbols ()
+  "Extend `prettify-symbols-alist' and turn on `prettify-symbols-mode'.
+A no-op if `stex-prettify-symbols' is nil.  Appends
+`stex-prettify-symbols-alist' rather than replacing
+`prettify-symbols-alist' outright, so AUCTeX's own standard-LaTeX-math
+entries (see the Commentary above `stex-prettify-symbols-alist') stay
+in effect too.  Leftover appended entries are not undone when
+`stex-mode' is disabled again -- same caveat as
+`stex--register-environments'/`stex--register-macros' (harmless: an
+sTeX macro simply isn't in a non-sTeX buffer's text to match against)
+-- but `prettify-symbols-mode' itself is turned back off then, unless
+`stex--prettify-symbols-was-on' says it was already on beforehand."
+  (when stex-prettify-symbols
+    (setq stex--prettify-symbols-was-on prettify-symbols-mode)
+    (setq-local prettify-symbols-alist
+                (append stex-prettify-symbols-alist prettify-symbols-alist))
+    (prettify-symbols-mode 1)))
+
 ;;; Local symbol-name completion
 
 ;; FLAMS's own `completion' LSP request is a permanent stub as of this
@@ -1287,8 +1384,12 @@ AUCTeX's `LaTeX-environment' command about sTeX environments like
 about sTeX macros like `\\symdecl', `\\notation' and `\\symref' (see
 `stex--register-macros'), and teaches `TeX-fold-mode' to fold
 `\\notation'/`\\symdef'/`\\textsymdecl' to a short label instead of
-AUCTeX's generic placeholder (see `stex--register-fold').  See
-`stex-mode-map' for the full command list and its shared prefix."
+AUCTeX's generic placeholder (see `stex--register-fold').  It also
+turns on `prettify-symbols-mode', extended with glyphs for sTeX's own
+macros on top of AUCTeX's standard LaTeX math symbols (see
+`stex-prettify-symbols'/`stex-prettify-symbols-alist'); set
+`stex-prettify-symbols' to nil to skip that.  See `stex-mode-map' for
+the full command list and its shared prefix."
   :lighter " sTeX"
   :keymap stex-mode-map
   (if stex-mode
@@ -1301,11 +1402,14 @@ AUCTeX's generic placeholder (see `stex--register-fold').  See
             (stex--register-environments)
             (stex--register-macros)
             (stex--register-fold)
+            (stex--register-prettify-symbols)
             (eglot-ensure))
         (error
          (setq stex-mode nil)
          (signal (car err) (cdr err))))
-    (kill-local-variable 'eglot-server-programs)))
+    (kill-local-variable 'eglot-server-programs)
+    (when (and stex-prettify-symbols (not stex--prettify-symbols-was-on))
+      (prettify-symbols-mode -1))))
 
 ;;;###autoload
 (defun stex-connect ()

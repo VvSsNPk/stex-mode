@@ -194,6 +194,51 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   `(require 'tex-fold nil t)` instead, which both checks availability
   and guarantees the file (and its variable) is actually loaded before
   touching it.
+- Macro prettification (`stex--register-prettify-symbols`,
+  `stex-prettify-symbols`/`stex-prettify-symbols-alist`): user-requested
+  ("writing stex looks ugly... emacs also has some latex prettify"), and
+  investigation turned up something not previously documented anywhere in
+  this file — AUCTeX's `tex.el` (`TeX-common-initialization`, confirmed by
+  reading the source directly) already does `(setq-local
+  prettify-symbols-alist tex--prettify-symbols-alist)` for every
+  `LaTeX-mode`/`TeX-mode` buffer, i.e. the same ~600-entry standard-LaTeX-
+  math table (`\alpha`, `\rightarrow`, `\forall`, …) plain Emacs's own
+  `tex-mode.el` ships, already available with zero `stex-mode` code
+  needed — it's just off by default (`prettify-symbols-mode` itself is a
+  plain toggle, nothing turns it on automatically). Confirmed empirically,
+  not just by reading source: a real `(LaTeX-mode)` scratch buffer has
+  626 buffer-local `prettify-symbols-alist` entries with zero code from
+  this package involved. None of that table is sTeX-specific, though
+  (confirmed `(assoc "\\importmodule" prettify-symbols-alist)` is nil on
+  a stock buffer) — `stex-prettify-symbols-alist` extends it (via
+  `append`, never replacing) with curated glyphs for `stex-mode`'s own
+  macro set (`stex--register-macros`'s list, plus `\importmodule`/
+  `\usemodule`/`\requiremodule`, which aren't in that list since nothing
+  in this file inserts them via `C-c C-m` — they're typed directly, or by
+  `stex--insert-usemodule`), grouped by what each macro *does* (declares
+  a symbol, defines its notation, references one, imports a module …)
+  rather than any single unifying convention — these glyph choices are
+  this package's own opinion, not derived from FLAMS/vscode source, and
+  `stex-prettify-symbols-alist` is a plain customizable alist so they're
+  easy to override. `stex--register-prettify-symbols` snapshots whether
+  `prettify-symbols-mode` was already on (`stex--prettify-symbols-was-on`)
+  before turning it on itself, so `stex-mode`'s disable body only turns it
+  back off if it was the one that turned it on — mirrors the "give it
+  back the way you found it" shape of the `eglot-server-programs`
+  save/restore elsewhere in this file, but for a real toggleable mode
+  rather than a variable `kill-local-variable` can just discard. The
+  appended alist entries themselves are *not* undone on disable — same
+  harmless-leftover caveat as `stex--register-environments`/
+  `stex--register-macros` (an sTeX macro string simply won't occur in a
+  non-sTeX buffer to match against). Verified end-to-end against a real
+  `(LaTeX-mode)` buffer with actual text (not just the alist entries in
+  isolation): inserted `\importmodule[...]{...}`, `\symdecl{...}[...]`,
+  `\alpha + \beta`, ran `font-lock-ensure`, and read back each character's
+  `composition` text property directly, confirming `\importmodule`
+  composes to U+21D2 (⇒), `\symdecl` to U+25C6 (◆), and AUCTeX's own
+  `\alpha`/`\beta` entries still compose correctly to α/β alongside them
+  — not just that the alist *contains* the right pairs, that
+  `prettify-symbols-mode`'s actual rendering machinery picks them up.
 - Build dashboard (`stex-build-dashboard`, `stex--dashboard-url`): the VS
   Code extension's build-progress webview turned out to be a plain
   `<iframe>` onto a page `flams` serves itself over HTTP
