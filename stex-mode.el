@@ -696,6 +696,7 @@ otherwise put them."
     (define-key prefix "o" #'stex-mathhub-open-file)
     (define-key prefix "u" #'stex-mathhub-insert-usemodule)
     (define-key prefix "s" #'stex-mathhub-search-symbols)
+    (define-key prefix "S" #'stex-mathhub-search)
     (define-key prefix "t" #'stex-mathhub-tree)
     (define-key prefix "a" #'stex-mathhub-new-archive)
     (define-key prefix "U" #'stex-mathhub-update)
@@ -722,6 +723,10 @@ using it).
 \\[stex-mathhub-search-symbols]  `stex-mathhub-search-symbols' -- fuzzy,
   incremental search over FLAMS's whole indexed MathHub (not just
   local drill-down), inserts a \\usemodule for the symbol you pick
+\\[stex-mathhub-search]  `stex-mathhub-search' -- same idea, but over
+  FLAMS's richer content index (documents/paragraphs/definitions/
+  examples/assertions/problems, filterable by category), opens the
+  file for the result you pick
 \\[stex-mathhub-tree]  `stex-mathhub-tree'
 \\[stex-mathhub-new-archive]  `stex-mathhub-new-archive'
 \\[stex-mathhub-update]  `stex-mathhub-update' -- git-pull every local
@@ -1865,6 +1870,157 @@ this package; works with no `.tex' file open, same as those too (see
       (user-error "𝖥𝖫∀𝖬∫: no matching symbol chosen"))
     (let ((arg (stex--symbol-uri-usemodule-arg uri)))
       (stex--insert-usemodule target-buffer (car arg) (cdr arg)))))
+
+;;; Category-filtered content search
+
+;; VS Code's search webview (see "Fuzzy symbol search" above) also
+;; exposes checkboxes to restrict results to specific categories --
+;; Documents, Paragraphs, Definitions, Examples, Assertions, Problems
+;; -- backed by a second, richer Leptos server function alongside
+;; `search_symbols', `POST api/search' (same
+;; source/router/search/src/lib.rs, same wire mechanism). Its `opts'
+;; parameter is a `FragmentQueryFilter' struct
+;; (backend-types/src/search.rs); empirically confirmed -- by running
+;; a real `flams' instance directly and probing five encoding
+;; hypotheses -- that Leptos's default `serde_qs' form encoding wants
+;; *bracket* notation for nested-struct fields, `opts[flags]=<bitmask>',
+;; not `opts.flags=', not a JSON blob under `opts', and not `flags'
+;; flattened to the top level; the latter three all come back as a 500
+;; "missing field 'opts'" (or a QsDeserializer parse error for the
+;; JSON-blob case), since `FragmentQueryFilter''s own fields are all
+;; `#[serde(default)]' but `opts' itself is not optional.
+;; `in_documents'/`languages' are left unset (default to "no
+;; restriction") -- only `flags' is ever sent.
+;;
+;; The response is `Vec<(f32, SearchResult)>'; `SearchResult' is a
+;; plain (externally-tagged, the serde default) enum --
+;; `Document(DocumentUri)' or `Paragraph { uri: DocumentElementUri,
+;; fors: Vec<SymbolUri>, def_like: bool, kind: SearchResultKind }' --
+;; so each JSON result is either `{"Document": "<uri>"}' or
+;; `{"Paragraph": {"uri": ..., "fors": [...], "def_like": ..., "kind":
+;; "..."}}'. `DocumentUri'/`DocumentElementUri' serialize as their URI
+;; strings the same way `SymbolUri' does (`serde_with::SerializeDisplay'
+;; on all three, confirmed by reading ftml_uris's uris/document.rs and
+;; uris/doc_element.rs), of the form
+;; `<base>?a=<archive>&p=<path>&d=<name>&l=<language>[&e=<element>]'
+;; (their `Display' impls) -- reusing `stex--symbol-uri-component' to
+;; pick that apart works unchanged for these too, since it's keyed
+;; generically by component letter, not specific to `SymbolUri'.
+;;
+;; Picking a result opens the underlying file -- there's no natural
+;; \usemodule target here, unlike the symbol search (a Paragraph
+;; result is a spot *within* a document, not a module to import) --
+;; jumping to the matched element's own position isn't attempted, same
+;; fidelity as `stex-mathhub-open-file'.
+
+(defconst stex--search-category-flags
+  '(("Documents" . 1) ("Paragraphs" . 2) ("Definitions" . 4)
+    ("Examples" . 8) ("Assertions" . 16) ("Problems" . 32))
+  "Category name -> `QueryFilterFlags' bit value (backend-types/src/search.rs).
+Mirrors the VS Code search webview's filter checkboxes.")
+
+(defconst stex--search-all-categories-flags 127
+  "Bitmask meaning \"no category filter\".
+Sent when no category is chosen.  `QueryFilterFlags::new()''s own
+default (0b0111_1111 = 127), used verbatim rather than OR-ing together
+every value in `stex--search-category-flags' ourselves, in case of an
+unnamed/reserved high bit.")
+
+(defun stex--search-result-doc-summary (uri)
+  "\"ARCHIVE[PATH/NAME]\"-style summary of a DocumentUri/DocumentElementUri URI."
+  (let ((archive (stex--symbol-uri-component "a" uri))
+        (path (stex--symbol-uri-component "p" uri))
+        (name (stex--symbol-uri-component "d" uri)))
+    (format "%s[%s]" archive (if path (concat path "/" name) name))))
+
+(defun stex--search-result-uri (entry)
+  "The DocumentUri/DocumentElementUri string ENTRY resolves to.
+ENTRY is a raw `SearchResult' alist -- see the Commentary above
+`stex--search-category-flags'."
+  (or (alist-get 'Document entry)
+      (alist-get 'uri (alist-get 'Paragraph entry))))
+
+(defun stex--search-result-label (entry)
+  "Human-readable completion label for a raw `SearchResult' alist ENTRY."
+  (let ((doc (alist-get 'Document entry))
+        (para (alist-get 'Paragraph entry)))
+    (if doc
+        (format "[Document]  %s" (stex--search-result-doc-summary doc))
+      (let* ((kind (alist-get 'kind para))
+             (fors (alist-get 'fors para))
+             (sym (and fors (stex--symbol-uri-component "s" (car fors)))))
+        (format "[%s]  %s -- %s" kind (or sym "?")
+                (stex--search-result-doc-summary (alist-get 'uri para)))))))
+
+(defun stex--search-result-local-path (uri)
+  "Resolve a DocumentUri/DocumentElementUri string URI to a local file.
+Tries the language-suffixed filename first, then the bare \".tex\"
+name (STEX's own file-naming convention -- mirrors
+`stex--resolve-local-usemodule-files')."
+  (let* ((archive (stex--symbol-uri-component "a" uri))
+         (path (stex--symbol-uri-component "p" uri))
+         (name (stex--symbol-uri-component "d" uri))
+         (lang (stex--symbol-uri-component "l" uri))
+         (rel (concat (if path (concat path "/") "") name))
+         (lang-path (stex--mathhub-local-path archive (concat rel "." lang ".tex")))
+         (plain-path (stex--mathhub-local-path archive (concat rel ".tex"))))
+    (if (file-exists-p lang-path) lang-path plain-path)))
+
+(defvar stex--search-last-results nil
+  "Alist of (LABEL . RAW-RESULT-ENTRY) from the last `stex-mathhub-search' query.
+Refreshed by `stex--search-collection'; read by `stex-mathhub-search'
+to recover the full result for the label `completing-read' returns.")
+
+(defun stex--search-collection (base query flags)
+  "Query BASE's flams server for QUERY restricted by FLAGS, return labels.
+Also refreshes `stex--search-last-results'.  Meant to be wrapped in
+`completion-table-dynamic' -- see `stex-mathhub-search'.  Returns nil
+for a QUERY under 2 characters, same reasoning as
+`stex--search-symbols-collection'."
+  (if (< (length query) 2)
+      nil
+    (let ((results (ignore-errors
+                      (stex--http-post base "api/search"
+                                        `(("query" . ,query)
+                                          ("num_results" . "30")
+                                          ("opts[flags]" . ,(number-to-string flags)))))))
+      (setq stex--search-last-results
+            (mapcar (lambda (r)
+                      (let ((entry (nth 1 r)))
+                        (cons (stex--search-result-label entry) entry)))
+                    results))
+      (mapcar #'car stex--search-last-results))))
+
+;;;###autoload
+(defun stex-mathhub-search ()
+  "Fuzzy-search FLAMS's indexed content, filtered by category, open the result.
+Prompts for zero or more categories (`stex--search-category-flags';
+empty selection means every category, see
+`stex--search-all-categories-flags'), then searches `api/search'
+incrementally as you type -- same `completion-table-dynamic' pattern
+as `stex-mathhub-search-symbols', just against the richer
+content-search endpoint instead of the symbol-only one -- and opens
+the chosen result's file.  Works with no `.tex' file open, same as
+the other MathHub commands (see `stex--mathhub-base-url')."
+  (interactive)
+  (let* ((base (stex--mathhub-base-url))
+         (categories (completing-read-multiple
+                      "Categories (empty = all, TAB to complete): "
+                      (mapcar #'car stex--search-category-flags)))
+         (chosen-flags (delq nil (mapcar (lambda (c)
+                                            (cdr (assoc c stex--search-category-flags)))
+                                          categories)))
+         (flags (if chosen-flags
+                    (apply #'logior chosen-flags)
+                  stex--search-all-categories-flags))
+         (label (completing-read
+                 "Search (2+ chars): "
+                 (completion-table-dynamic
+                  (lambda (q) (stex--search-collection base q flags)))))
+         (entry (cdr (assoc label stex--search-last-results))))
+    (unless entry
+      (user-error "𝖥𝖫∀𝖬∫: no matching result chosen"))
+    (find-file (stex--search-result-local-path (stex--search-result-uri entry)))))
 
 ;;;###autoload
 (defun stex-mathhub-new-archive ()

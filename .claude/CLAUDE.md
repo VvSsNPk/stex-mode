@@ -271,6 +271,66 @@ Single-file package, no build step. Loads via `(require 'stex-mode)` /
   previously (wrongly) documented elsewhere in this file as "not a
   documented REST endpoint" — that was true only of what the vscode
   extension's own source reveals, not of FLAMS's full source tree.
+- Category-filtered content search (`stex-mathhub-search`) — the VS Code
+  search webview also has checkboxes to restrict results to specific
+  categories (Documents/Paragraphs/Definitions/Examples/Assertions/
+  Problems); this is a second, richer Leptos server function alongside
+  `search_symbols`, `POST api/search` (same `source/router/search/src/lib.rs`,
+  same wire mechanism), whose `opts` parameter is a `FragmentQueryFilter`
+  struct (`backend-types/src/search.rs`) rather than a flat `query`/
+  `num_results` pair. The wire encoding for that nested-struct parameter
+  was a genuine unknown going in — Leptos server functions have several
+  plausible form encodings for a nested struct arg (dot notation, a JSON
+  blob, top-level flattening, bracket notation) and nothing in the vscode
+  extension's own source pins down which, since its search webview talks
+  to this endpoint via its own in-process Leptos call, not raw HTTP.
+  Resolved empirically, not by guessing: built the real `flams` binary
+  from `~/stextest/FLAMS` (`target/flams-release/flams`) and ran it
+  directly as a local HTTP server (`flams -m <empty-dir> --port <p>`,
+  no `--lsp` needed for a plain server), then probed all five hypotheses
+  against it with real `curl` requests. Confirmed result: Leptos's default
+  `serde_qs` form encoding wants *bracket* notation for nested fields —
+  `opts[flags]=<bitmask>` — returning `200 OK`; dot notation
+  (`opts.flags=`), a JSON blob under `opts`, top-level `flags=` with no
+  `opts` prefix, and omitting `opts` entirely all return `500`
+  (`Args|missing field 'opts'`, or a QsDeserializer parse error for the
+  JSON-blob case) — `FragmentQueryFilter`'s fields are all
+  `#[serde(default)]` but `opts` itself is not optional, so it must be
+  present even though `in_documents`/`languages` can be left unset.
+  `QueryFilterFlags` (`backend-types/src/search.rs`) is a `u8` bitfield:
+  Documents=1, Paragraphs=2, Definitions=4, Examples=8, Assertions=16,
+  Problems=32 (bit accessors named `allow_*`); `QueryFilterFlags::new()`'s
+  own default is `0b0111_1111` = 127 (an unnamed/reserved high bit beyond
+  the six named ones), sent verbatim as `stex--search-all-categories-flags`
+  for "no filter chosen" rather than OR-ing the six known values together.
+  The response, `Vec<(f32, SearchResult)>`, is a plain externally-tagged
+  enum per result — `{"Document": "<DocumentUri string>"}` or
+  `{"Paragraph": {"uri": "<DocumentElementUri string>", "fors":
+  ["<SymbolUri string>", ...], "def_like": bool, "kind":
+  "Document"|"Paragraph"|"Definition"|"Example"|"Assertion"|"Problem"}}`
+  (confirmed by reading the `SearchResult`/`SearchResultKind` derives
+  directly, not empirically — getting a *non-empty* result required a
+  real indexed MathHub archive, which a scratch archive built for this
+  investigation never got indexed by the locally-run `flams` in time;
+  the request-encoding side is empirically confirmed, the response-shape
+  side is derived from the Rust source plus `serde`'s own well-known
+  default enum representation, not from a live example).
+  `DocumentUri`/`DocumentElementUri` serialize as their own URI strings
+  the same way `SymbolUri` does (`serde_with::SerializeDisplay` on all
+  three, confirmed by reading `ftml_uris`'s `uris/document.rs`/
+  `uris/doc_element.rs`), of the form `<base>?a=<archive>&p=<path>&
+  d=<name>&l=<language>[&e=<element>]` — so `stex--symbol-uri-component`
+  (already generic on the component letter, despite its name) parses
+  these unchanged, no new URI-parsing code needed. `stex--search-result-
+  local-path` resolves one of these to an actual file by trying
+  `<path>/<name>.<language>.tex` first, then the bare `<path>/<name>.tex`
+  (STEX's own file-naming convention, same as
+  `stex--resolve-local-usemodule-files`). Since a search result can be a
+  document *or* a paragraph-level fragment, and there's no meaningful
+  `\usemodule` target for the latter (a paragraph is a spot *within* a
+  document, not a module to import), picking a result just opens its
+  file, same fidelity as `stex-mathhub-open-file` — no attempt to jump to
+  the matched element's exact position within it.
 - Not implemented: remote MathHub browsing/install, HTML/quiz preview
   panes, the fuzzy module-search UI, call-hierarchy view,
   `vscode://flams/open`-equivalent URI handling. These map to the remote-

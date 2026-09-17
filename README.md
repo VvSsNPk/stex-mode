@@ -45,6 +45,7 @@ Enabling it in a buffer:
 | `C-c C-x o` | `stex-mathhub-open-file`          | Drill down local MathHub archives, open a file |
 | `C-c C-x u` | `stex-mathhub-insert-usemodule`   | Drill down local MathHub archives, insert `\usemodule` |
 | `C-c C-x s` | `stex-mathhub-search-symbols`     | Fuzzy-search all indexed symbols, insert `\usemodule` |
+| `C-c C-x S` | `stex-mathhub-search`             | Fuzzy-search indexed content by category, open the file |
 | `C-c C-x t` | `stex-mathhub-tree`               | Whole local MathHub as a persistent tree (side window) |
 | `C-c C-x a` | `stex-mathhub-new-archive`        | Create a new MathHub archive |
 | `C-c C-x U` | `stex-mathhub-update`             | `git pull` local archives (see scopes below) |
@@ -135,6 +136,17 @@ real Emacs `completing-read` (via `completion-table-dynamic`, so it
 re-queries on every keystroke) rather than embedding a browser. Pick a
 result and it inserts a `\usemodule` for that symbol's module, same
 end result as the VS Code webview's search-then-click flow.
+
+`stex-mathhub-search` is the same idea over a richer endpoint,
+`POST api/search`, which also indexes whole documents and individual
+paragraphs/definitions/examples/assertions/problems, not just symbols --
+mirroring the category checkboxes (Documents, Paragraphs, Definitions,
+Examples, Assertions, Problems) in VS Code's own search webview. Prompts
+first for zero or more categories to restrict to (empty = everything),
+then searches incrementally the same way `stex-mathhub-search-symbols`
+does; picking a result opens its file (there's no `\usemodule` target
+here -- a paragraph-level result is a spot *within* a document, not a
+module to import).
 
 ## Inserting sTeX environments
 
